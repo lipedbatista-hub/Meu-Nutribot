@@ -47,7 +47,8 @@ atividade = st.sidebar.selectbox("Nível de Atividade", ["Sedentário", "Leve", 
 fatores = {"Sedentário": 1.2, "Leve": 1.375, "Moderado": 1.55, "Intenso": 1.725}
 fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
-get = tmb * factor_ativ = tmb * fator
+get = tmb * fator
+
 
 # Cálculo da Estratégia de Calorias e do Tempo Restante
 peso_a_mudar = peso_meta - peso_atual

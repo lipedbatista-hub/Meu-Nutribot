@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import math
-import requests
 from datetime import datetime, date
 import google.generativeai as genai
+from streamlit_gsheets import GSheetsConnection
 
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
@@ -16,31 +16,31 @@ st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 try:
     ID_PLANILHA = st.secrets["ID_PLANILHA"]
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
-    
-    # Links diretos para ler as abas da planilha como tabelas limpas (CSV)
-    URL_PERFIL = f"https://docs.google.com/spreadsheets/d/{ID_PLANILHA}/gviz/tq?tqx=out:csv&sheet=perfil"
-    URL_DIARIO = f"https://docs.google.com/spreadsheets/d/{ID_PLANILHA}/gviz/tq?tqx=out:csv&sheet=diario"
+    URL_SUSH = f"https://google.com{ID_PLANILHA}"
 except Exception as e:
     st.error("Erro crítico de inicialização. Por favor, configure os Secrets no painel do Streamlit Cloud.")
     st.stop()
 
+# Inicializa conexão nativa com o Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
+
 # --- FUNÇÕES DE BUSCA DE DADOS ---
-@st.cache_data(ttl=5) # Atualiza os dados a cada 5 segundos automaticamente
-def carregar_dados_perfil(url):
+def carregar_dados_perfil():
     try:
-        return pd.read_csv(url)
+        df = conn.read(spreadsheet=URL_SUSH, worksheet="perfil", ttl=0)
+        return pd.DataFrame(df)
     except Exception:
         return pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
 
-@st.cache_data(ttl=5)
-def carregar_dados_diario(url):
+def carregar_dados_diario():
     try:
-        return pd.read_csv(url)
+        df = conn.read(spreadsheet=URL_SUSH, worksheet="diario", ttl=0)
+        return pd.DataFrame(df)
     except Exception:
         return pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
 
-df_p = carregar_dados_perfil(URL_PERFIL)
-df_d = carregar_dados_diario(URL_DIARIO)
+df_p = carregar_dados_perfil()
+df_d = carregar_dados_diario()
 
 # --- PAINEL LATERAL: DADOS DE SAÚDE ---
 st.sidebar.header("⚖️ Seus Dados de Saúde")
@@ -57,7 +57,7 @@ peso_atual = st.sidebar.number_input("Peso Atual (kg)", value=p_peso, step=0.1)
 peso_meta = st.sidebar.number_input("Sua Meta de Peso (kg)", value=p_meta, step=0.1)
 
 lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
-index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
+index_atividade = lista_atitudes.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
 # Fórmulas de Nutrição
@@ -77,14 +77,17 @@ else:
     meta_calorica = get
     dias_restantes = 0
 
-# Configuração de envio para o Google Sheets de forma mobile simples (Via Google Forms integrado se quiser automação total de escrita)
+# GRAVAÇÃO DO PESO NA PLANILHA
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    st.sidebar.warning("Para salvar dados diretamente na planilha do Google, use o aplicativo do Sheets ou integre um webhook.")
-    # Exibe os dados estruturados na tela para o usuário saber o que mudar na planilha se necessário
-    st.sidebar.write({
-        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': idade, 
-        'altura': altura, 'peso_atual': peso_atual, 'peso_meta': peso_meta, 'atividade': atividade, 'meta_calorica': round(meta_calorica)
-    })
+    novo_p = pd.DataFrame([{
+        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
+        'altura': int(altura), 'peso_atual': float(peso_atual), 'peso_meta': float(peso_meta), 
+        'atividade': atividade, 'meta_calorica': int(round(meta_calorica))
+    }])
+    df_p_novo = pd.concat([df_p, novo_p], ignore_index=True)
+    conn.update(spreadsheet=URL_SUSH, worksheet="perfil", data=df_p_novo)
+    st.sidebar.success("Dados de peso gravados na planilha Google!")
+    st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
 col1, col2, col3 = st.columns(3)
@@ -112,11 +115,12 @@ st.markdown("---")
 st.subheader("📝 Adicionar Alimento com IA")
 texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2 ovos")
 
-if st.button("Analisar Alimento 🤖"):
+# GRAVAÇÃO DA COMIDA NA PLANILHA VIA IA
+if st.button("Analisar e Gravar Alimento 🤖"):
     if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
-        with st.spinner("A IA está calculando as calorias..."):
+        with st.spinner("A IA está calculando e salvando..."):
             try:
                 genai.configure(api_key=CHAVE_GEMINI)
                 instrucao_sistema = (
@@ -127,21 +131,36 @@ if st.button("Analisar Alimento 🤖"):
                 response = model.generate_content(texto_comida)
                 calorias = int(''.join(filter(str.isdigit, response.text.strip())) or 0)
                 
-                st.success(f"A IA calculou: **{calorias} kcal** para essa refeição!")
-                st.info("Abra o app do Google Planilhas no seu celular e adicione esta linha para registrar permanentemente.")
+                novo_alimento = pd.DataFrame([{
+                    'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'refeicao': texto_comida,
+                    'calorias': calorias
+                }])
+                df_d_novo = pd.concat([df_d, novo_alimento], ignore_index=True).drop(columns=['Data_Curta'], errors='ignore')
+                conn.update(spreadsheet=URL_SUSH, worksheet="diario", data=df_d_novo)
+                
+                st.success(f"Gravado na planilha! +{calorias} kcal adicionadas.")
+                st.rerun()
             except Exception as e:
-                st.error(f"Erro ao processar com a IA: {e}")
+                st.error(f"Erro ao processar: {e}")
 
 # Lista consumidos hoje salvos no Sheets
 st.markdown("---")
-st.subheader("📋 Consumido Hoje (Lido do Google Sheets)")
+st.subheader("📋 Consumido Hoje")
 hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
 
 if hoje_comidas.empty:
-    st.info("Nenhum alimento registrado hoje na sua planilha.")
+    st.info("Nenhum alimento registrado hoje.")
 else:
     for idx, row in hoje_comidas.iterrows():
-        st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
+        col_txt, col_btn = st.columns([0.85, 0.15])
+        with col_txt:
+            st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
+        with col_btn:
+            if st.button("🗑️", key=f"del_{idx}"):
+                df_limpo = df_d.drop(idx).drop(columns=['Data_Curta'], errors='ignore')
+                conn.update(spreadsheet=URL_SUSH, worksheet="diario", data=df_limpo)
+                st.rerun()
 
 # --- HISTÓRICO COMPLETO ---
 st.markdown("---")
@@ -166,4 +185,3 @@ else:
                 'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
             })
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
-                    

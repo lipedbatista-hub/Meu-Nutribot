@@ -24,7 +24,7 @@ try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     
-    # Limpa rigorosamente o ID de espaços, barras ou quebras de linha vindas do celular
+    # Limpa rigorosamente o ID de qualquer caractere inválido ou espaço extra enviado pelo celular
     BIN_ID_LIMPO = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "").replace("\n", "").replace("\r", "")
     
     # ENDEREÇOS FIXOS DO SERVIDOR JSONBIN TRAVADOS E SEPARADOS
@@ -65,7 +65,6 @@ def carregar_nuvem():
 def salvar_nuvem(perfil, diario):
     try:
         payload = json.dumps({"perfil": list(perfil), "diario": list(diario)}).encode('utf-8')
-        # BLINDAGEM MÁXIMA: URL_ESCRITA garante a barra de separação física na internet
         req = urllib.request.Request(URL_ESCRITA, data=payload, headers=HEADERS_NATIVOS, method='PUT')
         with urllib.request.urlopen(req, timeout=7) as resposta:
             return resposta.status == 200
@@ -231,4 +230,5 @@ else:
                 ]
                 
                 if salvar_nuvem(st.session_state.banco_perfil, lista_diario_limpa):
+                    st.session_state.banco_diario = lista_diario_limpa
         

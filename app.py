@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import math
-import requests
+import urllib.request
+import urllib.parse
 import json
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -24,10 +25,10 @@ try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     
-    # Limpa rigorosamente o ID de espaços, barras ou quebras de linha vindas do celular
+    # Limpa rigorosamente o ID de qualquer caractere inválido ou espaço extra enviado pelo celular
     BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "").replace("\n", "").replace("\r", "")
     
-    # ENDEREÇOS FIXOS DO SERVIDOR JSONBIN
+    # ENDEREÇOS FIXOS DO SERVIDOR JSONBIN TRAVADOS E SEPARADOS
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
     
@@ -43,13 +44,13 @@ except Exception:
 def obter_data_hora_brasil():
     return datetime.now(ZoneInfo("America/Sao_Paulo"))
 
-# --- FUNÇÕES DE SALVAMENTO ---
+# --- FUNÇÕES DE SALVAMENTO NATIVAS (SEM REQUEStS) ---
 def carregar_nuvem():
     try:
         url_dinamica = f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}"
-        resposta = requests.get(url_dinamica, headers=HEADERS, timeout=7)
-        if resposta.status_code == 200:
-            conteudo = resposta.json()
+        req = urllib.request.Request(url_dinamica, headers=HEADERS, method='GET')
+        with urllib.request.urlopen(req, timeout=7) as resposta:
+            conteudo = json.loads(resposta.read().decode('utf-8'))
             record = conteudo.get("record", {})
             
             if isinstance(record, str):
@@ -64,14 +65,12 @@ def carregar_nuvem():
 
 def salvar_nuvem(perfil, diario):
     try:
-        payload = {"perfil": list(perfil), "diario": list(diario)}
-        res = requests.put(URL_ESCRITA, headers=HEADERS, json=payload, timeout=7)
-        if res.status_code != 200:
-            st.error(f"⚠️ Resposta da Nuvem (Código {res.status_code}): {res.text}")
-            return False
-        return True
+        payload = json.dumps({"perfil": list(perfil), "diario": list(diario)}).encode('utf-8')
+        req = urllib.request.Request(URL_ESCRITA, data=payload, headers=HEADERS, method='PUT')
+        with urllib.request.urlopen(req, timeout=7) as resposta:
+            return resposta.status == 200
     except Exception as e:
-        st.error(f"Falha física de rede no envio: {e}")
+        st.error(f"Falha na gravação remota: {e}")
         return False
 
 # --- CONTROLE SÍNCRONO DE INICIALIZAÇÃO ---
@@ -233,9 +232,3 @@ else:
                 
                 if salvar_nuvem(st.session_state.banco_perfil, lista_diario_limpa):
                     st.session_state.banco_diario = lista_diario_limpa
-                    st.rerun()
-
-# --- HISTÓRICO COMPLETO ---
-st.markdown("---")
-st.subheader("📅 Histórico Completo de Registros")
-

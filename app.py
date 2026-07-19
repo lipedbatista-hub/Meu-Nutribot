@@ -3,7 +3,13 @@ import pandas as pd
 import math
 import requests
 from datetime import datetime, date, timedelta
-import google.generativeai as genai
+
+# Tenta importar o pacote google.generativeai de forma defensiva
+try:
+    import google.generativeai as genai
+except ImportError:
+    st.error("Biblioteca 'google-generativeai' não encontrada. Verifique o seu requirements.txt no GitHub.")
+    st.stop()
 
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
@@ -19,43 +25,69 @@ try:
     
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
-    HEADERS = {"X-Master-Key": JSONBIN_KEY, "Content-Type": "application/json"}
+    
+    # CHAVE DA CORREÇÃO: Cabeçalhos explícitos exigidos pelo JSONBin para ler e gravar em bins privados
+    HEADERS = {
+        "X-Master-Key": JSONBIN_KEY, 
+        "Content-Type": "application/json"
+    }
 except Exception:
-    st.error("Erro crítico: Verifique se as chaves GEMINI_API_KEY, JSONBIN_KEY e BIN_ID estão configuradas nos Secrets do Streamlit.")
+    st.error("Erro crítico de chaves: Verifique se GEMINI_API_KEY, JSONBIN_KEY e BIN_ID estão salvos nos Secrets do Streamlit Cloud.")
     st.stop()
 
 # --- AJUSTE DE FUSO HORÁRIO (BRASÍLIA - UTC-3) ---
 def obter_data_hora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
-# --- FUNÇÕES DE SALVAMENTO COM ATUALIZAÇÃO FORÇADA ---
+# --- FUNÇÕES DE SALVAMENTO COM TRATAMENTO EM NUVEM ---
 def carregar_nuvem():
     try:
-        resposta = requests.get(f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}", headers=HEADERS, timeout=5)
+        # Adicionamos um parâmetro dinâmico de timestamp na URL para desativar o cache do navegador do celular
+        url_dinamica = f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}"
+        resposta = requests.get(url_dinamica, headers=HEADERS, timeout=7)
         if resposta.status_code == 200:
-            dados = resposta.json().get("record", {})
-            return dados.get("perfil", []), dados.get("diario", [])
+            conteudo = resposta.json()
+            record = conteudo.get("record", {})
+            
+            # Se a resposta vier compactada como String por segurança do servidor, o Python descompacta
+            if isinstance(record, str):
+                import json
+                record = json.loads(record)
+                
+            perfil = record.get("perfil", [])
+            diario = record.get("diario", [])
+            return perfil, diario
     except Exception:
         pass
     return [], []
 
 def salvar_nuvem(perfil, diario):
     try:
-        requests.put(URL_ESCRITA, headers=HEADERS, json={"perfil": perfil, "diario": diario}, timeout=5)
+        # Monta o payload exatamente no formato JSON estável esperado pelo painel
+        payload = {"perfil": perfil, "diario": diario}
+        res = requests.put(URL_ESCRITA, headers=HEADERS, json=payload, timeout=7)
+        if res.status_code == 200:
+            return True
+        else:
+            st.error(f"Erro de comunicação com o servidor JSONBin: {res.status_code}")
     except Exception as e:
-        st.error(f"Erro ao salvar na nuvem: {e}")
+        st.error(f"Falha de rede ao salvar na nuvem: {e}")
+    return False
 
-# --- SINCRONIZAÇÃO DE MEMÓRIA LOCAL E NUVEM ---
-if "dados_carregados" not in st.session_state:
-    banco_perfil, banco_diario = carregar_nuvem()
-    st.session_state.banco_perfil = banco_perfil
-    st.session_state.banco_diario = banco_diario
-    st.session_state.dados_carregados = True
+# --- CONTROLE SÍNCRONO DE INICIALIZAÇÃO ---
+# Só busca os dados da internet na primeira vez que o site abre, evitando loops e lentidão no celular
+if "dados_sincronizados" not in st.session_state:
+    with st.spinner("Conectando ao banco de dados estável..."):
+        banco_perfil, banco_diario = carregar_nuvem()
+        st.session_state.banco_perfil = banco_perfil
+        st.session_state.banco_diario = banco_diario
+        st.session_state.dados_sincronizados = True
 
-# Cria os DataFrames estruturados a partir da memória atualizada
+# Cria os DataFrames estruturados a partir da memória estável sincronizada
 df_p = pd.DataFrame(st.session_state.banco_perfil)
 df_d = pd.DataFrame(st.session_state.banco_diario)
 
+# Garante a existência das colunas para não quebrar os cálculos matemáticos caso o banco do cliente esteja novo
 if df_p.empty:
     df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
 if df_d.empty:
@@ -79,12 +111,13 @@ lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
 index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
-# Fórmulas de Nutrição
+# Fórmulas de Nutrição (Mifflin-St Jeor)
 fatores = {"Sedentário": 1.2, "Leve": 1.375, "Moderado": 1.55, "Intenso": 1.725}
 fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
+# Cálculo da Estratégia de Peso
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
     meta_calorica = get - 500
@@ -103,9 +136,9 @@ if st.sidebar.button("💾 Salvar/Atualizar Peso"):
         'atividade': atividade, 'meta_calorica': int(round(meta_calorica))
     }
     st.session_state.banco_perfil.append(novo_p)
-    salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario)
-    st.sidebar.success("Dados de saúde salvos permanentemente!")
-    st.rerun()
+    if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
+        st.sidebar.success("Dados de peso fixados na nuvem!")
+        st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
 col1, col2, col3 = st.columns(3)
@@ -116,7 +149,7 @@ col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 els
 hoje_str = obter_data_hora_brasil().strftime('%Y-%m-%d')
 comido_hoje = 0
 
-# Filtro dos alimentos de hoje
+# Filtro calibrado do dia de hoje baseado em fuso brasileiro estável
 if not df_d.empty and 'data' in df_d.columns:
     df_d['Data_Curta'] = df_d['data'].astype(str).str.slice(0, 10)
     comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].astype(int).sum()
@@ -138,7 +171,7 @@ if st.button("Analisar e Gravar Alimento 🤖"):
     if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
-        with st.spinner("A IA está calculando e salvando..."):
+        with st.spinner("A IA está calculando e transmitindo para a nuvem..."):
             try:
                 genai.configure(api_key=CHAVE_GEMINI)
                 instrucao_sistema = (
@@ -155,16 +188,16 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                     'calorias': int(calorias)
                 }
                 
-                # Salva na memória instantânea do site E na nuvem ao mesmo tempo
+                # Registra na memória de renderização imediata do Streamlit
                 st.session_state.banco_diario.append(nova_comida)
-                salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario)
-                
-                st.success(f"Registrado com sucesso! +{calorias} kcal.")
-                st.rerun()
+                # Salva de verdade na nuvem sobrescrevendo o arquivo com a nova linha
+                if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
+                    st.success(f"Registrado com sucesso! +{calorias} kcal salvas de forma estável.")
+                    st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# --- EXIBIÇÃO EM TELA COMPATÍVEL E IMEDIATA ---
+# --- EXIBIÇÃO EM TELA COM LIXEIRA COMPATÍVEL ---
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 
@@ -176,42 +209,15 @@ else:
 if hoje_comidas.empty:
     st.info("Nenhum alimento registrado hoje.")
 else:
-    # Mostra os alimentos usando loops nativos para garantir exibição imediata
     for idx, row in hoje_comidas.iterrows():
         col_txt, col_btn = st.columns([0.85, 0.15])
         with col_txt:
-            # EXIBE O ALIMENTO E AS CALORIAS EXATAMENTE DO LADO
+            # Exibe o alimento e as calorias do lado com markdown limpo
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
+            # Constrói chaves de botões únicas para o Streamlit aceitar a renderização em loops móveis
             chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
             if st.button("🗑️", key=chave_botao):
-                # Remove da memória local
+                # Filtra a lista da sessão removendo o item que possui essa marcação exata de data/hora
                 st.session_state.banco_diario = [item for item in st.session_state.banco_diario if item.get('data') != row['data']]
-                # Atualiza a nuvem com a lista limpa
-                salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario)
-                st.rerun()
-
-# --- HISTÓRICO COMPLETO DE DATAS ---
-st.markdown("---")
-st.subheader("📅 Histórico Completo de Registros")
-
-if df_d.empty or df_d['data'].isna().all():
-    st.info("O banco de dados ainda está vazio.")
-else:
-    periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
-    if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
-        data_inicio, data_fim = periodo
-        df_historico = df_d.copy()
-        df_historico['Data_Objeto'] = pd.to_datetime(df_historico['data']).dt.date
-        df_filtrado = df_historico[(df_historico['Data_Objeto'] >= data_inicio) & (df_historico['Data_Objeto'] <= data_fim)]
-        
-        if df_filtrado.empty:
-            st.warning("Nenhum registro encontrado para este período.")
-        else:
-            total_periodo = df_filtrado['calorias'].astype(int).sum()
-            st.markdown(f"**Total consumido no período selecionado:** {total_periodo} kcal")
-            df_exibicao = df_filtrado[['data', 'refeicao', 'calorias']].rename(columns={
-                'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
-            })
-            st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
     

@@ -2,13 +2,13 @@ import streamlit as st
 import pandas as pd
 import math
 import os
-from datetime import datetime
+from datetime import datetime, date
 import google.generativeai as genai
 
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
 
-# Arquivos de banco de dados locais (salvos no servidor do site)
+# Arquivos de banco de dados locais (salvos permanentemente no servidor do site)
 ARQUIVO_PERFIL = 'historico_perfil.csv'
 ARQUIVO_DIARIO = 'diario_alimentos.csv'
 
@@ -63,9 +63,9 @@ else:
 
 # Botão para salvar alterações de peso
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': atividade, 'Meta_Calorica': round(meta_calorica)}])
+    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': atividade, 'Meta_Calorica': round(meta_calorica)}])
     pd.concat([df_p, novo_p], ignore_index=True).to_csv(ARQUIVO_PERFIL, index=False)
-    st.sidebar.success("Dados de peso atualizados!")
+    st.sidebar.success("Dados de peso updated!")
     st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
@@ -77,6 +77,8 @@ col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 els
 # Processamento e exibição das calorias do dia atual
 df_d = pd.read_csv(ARQUIVO_DIARIO)
 hoje_str = datetime.now().strftime('%Y-%m-%d')
+
+# Criação de coluna temporária para filtrar o dia de hoje
 df_d['Data_Curta'] = df_d['Data'].str.slice(0, 10)
 comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['Calorias'].sum()
 restante = round(meta_calorica) - comido_hoje
@@ -104,41 +106,80 @@ if st.button("Analisar e Registrar comida 🤖"):
                 # --- CONFIGURAÇÃO E CHAMADA DA API DO GEMINI ---
                 genai.configure(api_key=chave_api)
                 
-                # Definição do comportamento (System Instruction)
                 instrucao_sistema = (
                     "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. "
                     "Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, "
                     "absolutamente nada mais. Se não for comida, responda 0."
                 )
                 
-                # Atualizado para o modelo de produção mais recente e gratuito
                 model = genai.GenerativeModel(
                     model_name="gemini-3.1-flash-lite",
                     system_instruction=instrucao_sistema
                 )
                 
-                # Envia o prompt para o modelo
                 response = model.generate_content(texto_comida)
                 texto_resposta = response.text.strip()
                 
-                # Filtra apenas os números da resposta da IA
                 calorias = int(''.join(filter(str.isdigit, texto_resposta)) or 0)
                 
-                # Salva a refeição no histórico do diário
-                novo_alimento = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d %H:%M'), 'Refeicao': texto_comida, 'Calorias': calorias}])
-                pd.concat([df_d, novo_alimento], ignore_index=True).drop(columns=['Data_Curta'], errors='ignore').to_csv(ARQUIVO_DIARIO, index=False)
+                # Salva a refeição no histórico de forma definitiva (com data e hora exatas)
+                novo_alimento = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'Refeicao': texto_comida, 'Calorias': calorias}])
+                df_atualizado = pd.concat([df_d, novo_alimento], ignore_index=True).drop(columns=['Data_Curta'], errors='ignore')
+                df_atualizado.to_csv(ARQUIVO_DIARIO, index=False)
                 
                 st.success(f"Registrado com sucesso! +{calorias} kcal adicionadas.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao conectar com a IA: {e}")
 
-# Lista na tela todos os alimentos consumidos no dia de hoje
+# Lista na tela todos os alimentos consumidos no dia de hoje com opção de remoção
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str]
+
 if hoje_comidas.empty:
     st.info("Nenhum alimento registrado hoje.")
 else:
     for idx, row in hoje_comidas.iterrows():
-        st.write(f"• **{row['Refeicao']}** — {row['Calorias']} kcal")
+        col_txt, col_btn = st.columns([0.85, 0.15])
+        with col_txt:
+            st.markdown(f"• **{row['Refeicao']}** — {row['Calorias']} kcal")
+        with col_btn:
+            if st.button("🗑️", key=f"del_{idx}"):
+                df_limpo = df_d.drop(idx).drop(columns=['Data_Curta'], errors='ignore')
+                df_limpo.to_csv(ARQUIVO_DIARIO, index=False)
+                st.rerun()
+
+# --- NOVA SEÇÃO: HISTÓRICO PERMANENTE DE DATAS ---
+st.markdown("---")
+st.subheader("📅 Histórico Completo de Registros")
+
+if df_d.empty:
+    st.info("O banco de dados ainda está vazio.")
+else:
+    # Filtro interativo por calendário
+    st.markdown("Selecione um período para buscar seus registros antigos:")
+    periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
+    
+    # Tratamento para garantir que o usuário selecionou início e fim no componente do Streamlit
+    if isinstance(periodo, list) and len(periodo) == 2:
+        data_inicio, data_fim = periodo
+        
+        # Converte a coluna 'Data' do arquivo para o tipo datetime do pandas para fazer a comparação correta
+        df_historico = df_d.copy()
+        df_historico['Data_Objeto'] = pd.to_datetime(df_historico['Data']).dt.date
+        
+        # Filtra os dados com base no intervalo selecionado pelo usuário
+        df_filtrado = df_historico[(df_historico['Data_Objeto'] >= data_inicio) & (df_historico['Data_Objeto'] <= data_fim)]
+        
+        if df_filtrado.empty:
+            st.warning("Nenhum registro encontrado para o período selecionado.")
+        else:
+            # Exibe métrica do total consumido no período filtrado
+            total_periodo = df_filtrado['Calorias'].sum()
+            st.metric(label="Total Consumido no Período", value=f"{total_periodo} kcal")
+            
+            # Formata a tabela final limpando colunas auxiliares antes de exibir para o usuário
+            tabela_exibicao = df_filtrado.drop(columns=['Data_Curta', 'Data_Objeto'], errors='ignore')
+            st.dataframe(tabela_exibicao, use_container_width=True, hide_index=True)
+        

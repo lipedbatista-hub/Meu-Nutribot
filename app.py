@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import math
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import google.generativeai as genai
 
 # Configuração da página do site
@@ -24,11 +24,15 @@ except Exception:
     st.error("Erro crítico: Verifique se as chaves GEMINI_API_KEY, JSONBIN_KEY e BIN_ID estão configuradas nos Secrets do Streamlit.")
     st.stop()
 
+# --- AJUSTE DE FUSO HORÁRIO (BRASÍLIA - UTC-3) ---
+def obter_data_hora_brasil():
+    # Força o horário correto do Brasil independentemente de onde o servidor está hospedado
+    return datetime.utcnow() - timedelta(hours=3)
+
 # --- FUNÇÕES DE SALVAMENTO COM ATUALIZAÇÃO FORÇADA ---
 def carregar_nuvem():
     try:
-        # Força o servidor a ignorar o cache usando o timestamp atual
-        resposta = requests.get(f"{URL_LEITURA}?nocache={datetime.now().timestamp()}", headers=HEADERS, timeout=5)
+        resposta = requests.get(f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}", headers=HEADERS, timeout=5)
         if resposta.status_code == 200:
             dados = resposta.json().get("record", {})
             return dados.get("perfil", []), dados.get("diario", [])
@@ -45,9 +49,15 @@ def salvar_nuvem(perfil, diario):
 # Carrega os dados estáveis direto do JSONBin
 banco_perfil, banco_diario = carregar_nuvem()
 
-# Correção Crítica: Força a criação das colunas exatas do DataFrame para evitar conflito de leitura
-df_p = pd.DataFrame(banco_perfil, columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
-df_d = pd.DataFrame(banco_diario, columns=['data', 'refeicao', 'calorias'])
+# Força a conversão correta dos dicionários em tabelas estruturadas do Pandas
+df_p = pd.DataFrame.from_records(banco_perfil, columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
+df_d = pd.DataFrame.from_records(banco_diario, columns=['data', 'refeicao', 'calorias'])
+
+# Garante que os DataFrames nunca fiquem nulos
+if df_p.empty:
+    df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
+if df_d.empty:
+    df_d = pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
 
 # --- PAINEL LATERAL: DADOS DE SAÚDE ---
 st.sidebar.header("⚖️ Seus Dados de Saúde")
@@ -86,7 +96,7 @@ else:
 
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
     novo_p = {
-        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
+        'data': obter_data_hora_brasil().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
         'altura': int(altura), 'peso_atual': float(peso_atual), 'peso_meta': float(peso_meta), 
         'atividade': atividade, 'meta_calorica': int(round(meta_calorica))
     }
@@ -101,11 +111,11 @@ col1.metric("Peso Atual", f"{peso_atual} kg")
 col2.metric("Meta Final", f"{peso_meta} kg")
 col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 else "Na Meta! 🎉")
 
-hoje_str = datetime.now().strftime('%Y-%m-%d')
+hoje_str = obter_data_hora_brasil().strftime('%Y-%m-%d')
 comido_hoje = 0
 
-if not df_d.dropna(subset=['data']).empty:
-    # Garante a formatação limpa de string para a comparação de datas funcionar no celular
+# Criação segura do filtro da lista de hoje
+if not df_d.empty and 'data' in df_d.columns:
     df_d['Data_Curta'] = df_d['data'].astype(str).str.slice(0, 10)
     comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].astype(int).sum()
 
@@ -138,12 +148,11 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                 calorias = int(''.join(filter(str.isdigit, response.text.strip())) or 0)
                 
                 nova_comida = {
-                    'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'data': obter_data_hora_brasil().strftime('%Y-%m-%d %H:%M:%S'),
                     'refeicao': str(texto_comida),
                     'calorias': int(calorias)
                 }
                 
-                # Recarrega a nuvem antes de adicionar para não perder históricos paralelos
                 p_atual, d_atual = carregar_nuvem()
                 d_atual.append(nova_comida)
                 salvar_nuvem(p_atual, d_atual)
@@ -157,7 +166,7 @@ if st.button("Analisar e Gravar Alimento 🤖"):
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 
-if 'Data_Curta' in df_d.columns:
+if not df_d.empty and 'Data_Curta' in df_d.columns:
     hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str]
 else:
     hoje_comidas = pd.DataFrame()
@@ -173,7 +182,6 @@ else:
             chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
             if st.button("🗑️", key=chave_botao):
                 p_atual, d_atual = carregar_nuvem()
-                # Remove o item comparando a string de carimbo de data
                 d_limpo = [item for item in d_atual if item.get('data') != row['data']]
                 salvar_nuvem(p_atual, d_limpo)
                 st.rerun()
@@ -182,7 +190,7 @@ else:
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
-if df_d.dropna(subset=['data']).empty:
+if df_d.empty or df_d['data'].isna().all():
     st.info("O banco de dados ainda está vazio.")
 else:
     periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
@@ -201,3 +209,4 @@ else:
                 'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
             })
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
+    

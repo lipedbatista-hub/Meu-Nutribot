@@ -21,12 +21,14 @@ st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
-    BIN_ID = st.secrets["BIN_ID"]
     
+    # Limpa espaços ou barras extras que possam vir do celular por acidente
+    BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "")
+    
+    # CORREÇÃO CRÍTICA: Garante a barra de separação exata entre o site e o ID da Bin
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
     
-    # CHAVE DA CORREÇÃO: Cabeçalhos explícitos exigidos pelo JSONBin para ler e gravar em bins privados
     HEADERS = {
         "X-Master-Key": JSONBIN_KEY, 
         "Content-Type": "application/json"
@@ -42,14 +44,12 @@ def obter_data_hora_brasil():
 # --- FUNÇÕES DE SALVAMENTO COM TRATAMENTO EM NUVEM ---
 def carregar_nuvem():
     try:
-        # Adicionamos um parâmetro dinâmico de timestamp na URL para desativar o cache do navegador do celular
         url_dinamica = f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}"
         resposta = requests.get(url_dinamica, headers=HEADERS, timeout=7)
         if resposta.status_code == 200:
             conteudo = resposta.json()
             record = conteudo.get("record", {})
             
-            # Se a resposta vier compactada como String por segurança do servidor, o Python descompacta
             if isinstance(record, str):
                 import json
                 record = json.loads(record)
@@ -63,7 +63,6 @@ def carregar_nuvem():
 
 def salvar_nuvem(perfil, diario):
     try:
-        # Monta o payload exatamente no formato JSON estável esperado pelo painel
         payload = {"perfil": perfil, "diario": diario}
         res = requests.put(URL_ESCRITA, headers=HEADERS, json=payload, timeout=7)
         if res.status_code == 200:
@@ -75,7 +74,6 @@ def salvar_nuvem(perfil, diario):
     return False
 
 # --- CONTROLE SÍNCRONO DE INICIALIZAÇÃO ---
-# Só busca os dados da internet na primeira vez que o site abre, evitando loops e lentidão no celular
 if "dados_sincronizados" not in st.session_state:
     with st.spinner("Conectando ao banco de dados estável..."):
         banco_perfil, banco_diario = carregar_nuvem()
@@ -87,7 +85,6 @@ if "dados_sincronizados" not in st.session_state:
 df_p = pd.DataFrame(st.session_state.banco_perfil)
 df_d = pd.DataFrame(st.session_state.banco_diario)
 
-# Garante a existência das colunas para não quebrar os cálculos matemáticos caso o banco do cliente esteja novo
 if df_p.empty:
     df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
 if df_d.empty:
@@ -111,13 +108,12 @@ lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
 index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
-# Fórmulas de Nutrição (Mifflin-St Jeor)
+# Fórmulas de Nutrição
 fatores = {"Sedentário": 1.2, "Leve": 1.375, "Moderado": 1.55, "Intenso": 1.725}
 fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
-# Cálculo da Estratégia de Peso
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
     meta_calorica = get - 500
@@ -133,7 +129,7 @@ if st.sidebar.button("💾 Salvar/Atualizar Peso"):
     novo_p = {
         'data': obter_data_hora_brasil().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
         'altura': int(altura), 'peso_atual': float(peso_atual), 'peso_meta': float(peso_meta), 
-        'atividade': atividade, 'meta_calorica': int(round(meta_calorica))
+        'atividade': activity = atividade, 'meta_calorica': int(round(meta_calorica))
     }
     st.session_state.banco_perfil.append(novo_p)
     if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
@@ -149,7 +145,6 @@ col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 els
 hoje_str = obter_data_hora_brasil().strftime('%Y-%m-%d')
 comido_hoje = 0
 
-# Filtro calibrado do dia de hoje baseado em fuso brasileiro estável
 if not df_d.empty and 'data' in df_d.columns:
     df_d['Data_Curta'] = df_d['data'].astype(str).str.slice(0, 10)
     comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].astype(int).sum()
@@ -171,7 +166,7 @@ if st.button("Analisar e Gravar Alimento 🤖"):
     if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
-        with st.spinner("A IA está calculando e transmitindo para a nuvem..."):
+        with st.spinner("A IA está calculando e salvando..."):
             try:
                 genai.configure(api_key=CHAVE_GEMINI)
                 instrucao_sistema = (
@@ -188,16 +183,14 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                     'calorias': int(calorias)
                 }
                 
-                # Registra na memória de renderização imediata do Streamlit
                 st.session_state.banco_diario.append(nova_comida)
-                # Salva de verdade na nuvem sobrescrevendo o arquivo com a nova linha
                 if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
-                    st.success(f"Registrado com sucesso! +{calorias} kcal salvas de forma estável.")
+                    st.success(f"Registrado com sucesso! +{calorias} kcal.")
                     st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# --- EXIBIÇÃO EM TELA COM LIXEIRA COMPATÍVEL ---
+# --- EXIBIÇÃO EM TELA ---
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 
@@ -212,12 +205,30 @@ else:
     for idx, row in hoje_comidas.iterrows():
         col_txt, col_btn = st.columns([0.85, 0.15])
         with col_txt:
-            # Exibe o alimento e as calorias do lado com markdown limpo
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
-            # Constrói chaves de botões únicas para o Streamlit aceitar a renderização em loops móveis
             chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
             if st.button("🗑️", key=chave_botao):
-                # Filtra a lista da sessão removendo o item que possui essa marcação exata de data/hora
                 st.session_state.banco_diario = [item for item in st.session_state.banco_diario if item.get('data') != row['data']]
-    
+                if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
+                    st.rerun()
+
+# --- HISTÓRICO COMPLETO ---
+st.markdown("---")
+st.subheader("📅 Histórico Completo de Registros")
+
+if df_d.empty or df_d['data'].isna().all():
+    st.info("O banco de dados ainda está vazio.")
+else:
+    periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
+    if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
+        data_inicio, data_fim = periodo
+        df_historico = df_d.copy()
+        df_historico['Data_Objeto'] = pd.to_datetime(df_historico['data']).dt.date
+        df_filtrado = df_historico[(df_historico['Data_Objeto'] >= data_inicio) & (df_historico['Data_Objeto'] <= data_fim)]
+        
+        if df_filtrado.empty:
+            st.warning("Nenhum registro encontrado para este período.")
+        else:
+            total_periodo = df_filtrado['calorias'].astype(int).sum()
+            st.markdown(f"**Total consumido no período selecionado:** {total_periodo} kcal")

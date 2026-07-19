@@ -237,4 +237,4 @@ else:
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
-if len(st.session_state.banco_diario) == 0:
+# CORREÇÃO DA RENDERIZAÇÃO: Incluído o comando informativo identado corretamente na linha subsequente

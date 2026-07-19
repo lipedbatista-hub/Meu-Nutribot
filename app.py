@@ -3,7 +3,7 @@ import pandas as pd
 import math
 import os
 from datetime import datetime
-from openai import OpenAI
+import google.generativeai as genai
 
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
@@ -24,7 +24,8 @@ st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
 # --- PAINEL LATERAL: CONFIGURAÇÕES E CHAVE API ---
 st.sidebar.header("🔑 Configurações do Sistema")
-chave_api = st.sidebar.text_input("Sua Chave OpenAI (sk-...)", type="password")
+# Atualizado para pedir a chave do Gemini
+chave_api = st.sidebar.text_input("Sua Chave Gemini (AI Studio)", type="password")
 
 st.sidebar.subheader("⚖️ Seus Dados de Saúde")
 df_p = pd.read_csv(ARQUIVO_PERFIL)
@@ -49,7 +50,6 @@ fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
-
 # Cálculo da Estratégia de Calorias e do Tempo Restante
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
@@ -64,13 +64,12 @@ else:
 
 # Botão para salvar alterações de peso
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': atividade, 'Meta_Calorica': round(meta_calorica)}])
+    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': activity, 'Meta_Calorica': round(meta_calorica)}])
     pd.concat([df_p, novo_p], ignore_index=True).to_csv(ARQUIVO_PERFIL, index=False)
-    st.sidebar.success("Dados de peso atualizados!")
+    st.sidebar.success("Dados de peso updated!")
     st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
-# Mostra os cartões com os dados principais no topo
 col1, col2, col3 = st.columns(3)
 col1.metric("Peso Atual", f"{peso_atual} kg")
 col2.metric("Meta Final", f"{peso_meta} kg")
@@ -97,23 +96,29 @@ texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2
 
 if st.button("Analisar e Registrar comida 🤖"):
     if not chave_api:
-        st.error("Por favor, insira sua chave da API da OpenAI no menu lateral.")
+        st.error("Por favor, insira sua chave da API do Gemini no menu lateral.")
     elif not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
         with st.spinner("A IA está calculando as calorias..."):
             try:
-                # Conecta com a inteligência do ChatGPT para converter texto em kcal
-                client = OpenAI(api_key=chave_api)
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, absolutamente nada mais. Se não for comida, responda 0."},
-                        {"role": "user", "content": texto_comida}
-                    ],
-                    temperature=0.2
+                # --- CONFIGURAÇÃO E CHAMADA DA API DO GEMINI ---
+                genai.configure(api_key=chave_api)
+                
+                # Definição do comportamento (System Instruction) e escolha do modelo
+                instrucao_sistema = "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, absolutamente nada mais. Se não for comida, responda 0."
+                
+                model = genai.GenerativeModel(
+                    model_name="gemini-2.5-flash",
+                    system_instruction=instrucao_sistema
                 )
-                calorias = int(''.join(filter(str.isdigit, response.choices.message.content.strip())) or 0)
+                
+                # Envia o prompt para o modelo
+                response = model.generate_content(texto_comida)
+                texto_resposta = response.text.strip()
+                
+                # Filtra apenas os números da resposta da IA
+                calorias = int(''.join(filter(str.isdigit, texto_resposta)) or 0)
                 
                 # Salva a refeição no histórico do diário
                 novo_alimento = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d %H:%M'), 'Refeicao': texto_comida, 'Calorias': calorias}])

@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import math
 import requests
-import json
 from datetime import datetime, date
 import google.generativeai as genai
 
@@ -10,23 +9,28 @@ import google.generativeai as genai
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
 
 st.title("🍏 Meu NutriBot Inteligente")
-st.markdown("Controle de peso, metas e inteligência artificial para calorias com persistência em nuvem.")
+st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
-# --- CONEXÃO SEGURA COM O GEMINI E STORAGE ---
+# --- CONEXÃO INVISÍVEL E SEGURA COM JSONBIN ---
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
-    APP_ID = st.secrets.get("APP_ID", "nutribot_PROJETO_PADRAO_9988")
-    URL_BANCO = f"https://vercel.app{APP_ID}"
+    JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
+    BIN_ID = st.secrets["BIN_ID"]
+    
+    URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
+    URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
+    HEADERS = {"X-Master-Key": JSONBIN_KEY, "Content-Type": "application/json"}
 except Exception:
-    st.error("Erro crítico: Por favor, adicione a sua GEMINI_API_KEY nos Secrets do Streamlit.")
+    st.error("Erro crítico: Verifique se as chaves GEMINI_API_KEY, JSONBIN_KEY e BIN_ID estão configuradas nos Secrets do Streamlit.")
     st.stop()
 
-# --- FUNÇÕES NATIVAS DE SALVAMENTO REMOTO (NUNCA APAGA) ---
+# --- FUNÇÕES DE SALVAMENTO COM ATUALIZAÇÃO FORÇADA ---
 def carregar_nuvem():
     try:
-        resposta = requests.get(URL_BANCO, timeout=5)
-        if resposta.status_code == 200 and resposta.text:
-            dados = resposta.json()
+        # Adiciona carimbo de data/hora na URL para forçar o celular a ler o dado mais recente da nuvem
+        resposta = requests.get(f"{URL_LEITURA}?nocache={datetime.now().timestamp()}", headers=HEADERS, timeout=5)
+        if resposta.status_code == 200:
+            dados = resposta.json().get("record", {})
             return dados.get("perfil", []), dados.get("diario", [])
     except Exception:
         pass
@@ -34,11 +38,11 @@ def carregar_nuvem():
 
 def salvar_nuvem(perfil, diario):
     try:
-        requests.post(URL_BANCO, json={"perfil": perfil, "diario": diario}, timeout=5)
-    except Exception:
-        st.error("Erro de conexão com o servidor de dados. Tentando novamente...")
+        requests.put(URL_ESCRITA, headers=HEADERS, json={"perfil": perfil, "diario": diario}, timeout=5)
+    except Exception as e:
+        st.error(f"Erro ao salvar na nuvem: {e}")
 
-# Carrega os dados reais direto da nuvem toda vez que o site abre
+# Carrega os dados reais e estáveis da nuvem toda vez que o site atualiza
 banco_perfil, banco_diario = carregar_nuvem()
 
 df_p = pd.DataFrame(banco_perfil)
@@ -67,12 +71,13 @@ lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
 index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
-# Fórmulas de Nutrição
+# Fórmulas de Nutrição (Mifflin-St Jeor)
 fatores = {"Sedentário": 1.2, "Leve": 1.375, "Moderado": 1.55, "Intenso": 1.725}
 fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
+# Cálculo da Estratégia de Calorias e do Tempo Restante
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
     meta_calorica = get - 500
@@ -122,12 +127,11 @@ st.markdown("---")
 st.subheader("📝 Adicionar Alimento com IA")
 texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2 ovos")
 
-# GRAVAÇÃO E PERSISTÊNCIA COMPLETA DA COMIDA
 if st.button("Analisar e Gravar Alimento 🤖"):
     if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
-        with st.spinner("A IA está calculando e salvando na nuvem..."):
+        with st.spinner("A IA está calculando e salvando..."):
             try:
                 genai.configure(api_key=CHAVE_GEMINI)
                 instrucao_sistema = (
@@ -146,12 +150,12 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                 banco_diario.append(nova_comida)
                 salvar_nuvem(banco_perfil, banco_diario)
                 
-                st.success(f"Registrado com sucesso! +{calorias} kcal salvas na nuvem.")
+                st.success(f"Registrado com sucesso! +{calorias} kcal.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# Lista consumidos hoje com lógica segura baseada na data/hora exata do item
+# Lista consumidos hoje com lixeira sincronizada com a nuvem
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
@@ -164,15 +168,15 @@ else:
         with col_txt:
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
-            # Geramos uma chave única de botão usando o carimbo de data/hora
+            # Cria um identificador único para o botão usando o timestamp de salvamento
             chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
             if st.button("🗑️", key=chave_botao):
-                # Remove o item correto varrendo a lista original pela marcação temporal
+                # Filtra a lista original na nuvem removendo exatamente o registro clicado
                 banco_diario = [item for item in banco_diario if item.get('data') != row['data']]
                 salvar_nuvem(banco_perfil, banco_diario)
                 st.rerun()
 
-# --- HISTÓRICO COMPLETO ---
+# --- HISTÓRICO COMPLETO DE DATAS ---
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 

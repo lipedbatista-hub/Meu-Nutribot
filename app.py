@@ -23,7 +23,7 @@ try:
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "")
     
-    # URL corrigida e separada por barras limpas
+    # URL de leitura e escrita com barramento correto
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
     
@@ -136,6 +136,7 @@ if st.sidebar.button("💾 Salvar/Atualizar Peso"):
     }
     st.session_state.banco_perfil.append(novo_p)
     if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
+        df_p = pd.DataFrame(st.session_state.banco_perfil)  # Força a atualização local da tabela
         st.sidebar.success("Dados de peso fixados na nuvem!")
         st.rerun()
 
@@ -188,6 +189,7 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                 
                 st.session_state.banco_diario.append(nova_comida)
                 if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
+                    df_d = pd.DataFrame(st.session_state.banco_diario)  # Força a atualização local antes do rerun
                     st.success(f"Registrado com sucesso! +{calorias} kcal.")
                     st.rerun()
             except Exception as e:
@@ -214,6 +216,7 @@ else:
             if st.button("🗑️", key=chave_botao):
                 st.session_state.banco_diario = [item for item in st.session_state.banco_diario if item.get('data') != row['data']]
                 if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
+                    df_d = pd.DataFrame(st.session_state.banco_diario)
                     st.rerun()
 
 # --- HISTÓRICO COMPLETO ---
@@ -231,9 +234,4 @@ else:
         df_filtrado = df_historico[(df_historico['Data_Objeto'] >= data_inicio) & (df_historico['Data_Objeto'] <= data_fim)]
         
         if df_filtrado.empty:
-            st.warning("Nenhum registro encontrado para este período.")
-        else:
-            total_periodo = df_filtrado['calorias'].astype(int).sum()
-            st.markdown(f"**Total consumido no período selecionado:** {total_periodo} kcal")
-            df_exibicao = df_filtrado[['data', 'refeicao', 'calorias']].rename(columns={
-            
+                

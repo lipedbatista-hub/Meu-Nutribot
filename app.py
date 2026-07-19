@@ -63,7 +63,6 @@ else:
 
 # Botão para salvar alterações de peso
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    # Corrigido 'activity' para 'atividade' que gerava erro de execução
     novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': atividade, 'Meta_Calorica': round(meta_calorica)}])
     pd.concat([df_p, novo_p], ignore_index=True).to_csv(ARQUIVO_PERFIL, index=False)
     st.sidebar.success("Dados de peso atualizados!")
@@ -106,11 +105,15 @@ if st.button("Analisar e Registrar comida 🤖"):
                 genai.configure(api_key=chave_api)
                 
                 # Definição do comportamento (System Instruction)
-                instrucao_sistema = "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, absolutamente nada mais. Se não for comida, responda 0."
+                instrucao_sistema = (
+                    "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. "
+                    "Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, "
+                    "absolutamente nada mais. Se não for comida, responda 0."
+                )
                 
-                # Modelo estável e altamente disponível na camada gratuita
+                # Atualizado para o modelo de produção mais recente e gratuito
                 model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
+                    model_name="gemini-3.1-flash-lite",
                     system_instruction=instrucao_sistema
                 )
                 
@@ -139,4 +142,3 @@ if hoje_comidas.empty:
 else:
     for idx, row in hoje_comidas.iterrows():
         st.write(f"• **{row['Refeicao']}** — {row['Calorias']} kcal")
-                

@@ -24,7 +24,6 @@ st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
 # --- PAINEL LATERAL: CONFIGURAÇÕES E CHAVE API ---
 st.sidebar.header("🔑 Configurações do Sistema")
-# Atualizado para pedir a chave do Gemini
 chave_api = st.sidebar.text_input("Sua Chave Gemini (AI Studio)", type="password")
 
 st.sidebar.subheader("⚖️ Seus Dados de Saúde")
@@ -64,9 +63,10 @@ else:
 
 # Botão para salvar alterações de peso
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': activity, 'Meta_Calorica': round(meta_calorica)}])
+    # Corrigido 'activity' para 'atividade' que gerava erro de execução
+    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': atividade, 'Meta_Calorica': round(meta_calorica)}])
     pd.concat([df_p, novo_p], ignore_index=True).to_csv(ARQUIVO_PERFIL, index=False)
-    st.sidebar.success("Dados de peso updated!")
+    st.sidebar.success("Dados de peso atualizados!")
     st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
@@ -105,15 +105,13 @@ if st.button("Analisar e Registrar comida 🤖"):
                 # --- CONFIGURAÇÃO E CHAMADA DA API DO GEMINI ---
                 genai.configure(api_key=chave_api)
                 
-                # Definição do comportamento (System Instruction) e escolha do modelo
+                # Definição do comportamento (System Instruction)
                 instrucao_sistema = "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, absolutamente nada mais. Se não for comida, responda 0."
                 
-                # Mude para esta linha:
-model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash-001",  # Versão corrigida e disponível
-    system_instruction=instrucao_sistema
-)
-
+                # Modelo estável e altamente disponível na camada gratuita
+                model = genai.GenerativeModel(
+                    model_name="gemini-1.5-flash",
+                    system_instruction=instrucao_sistema
                 )
                 
                 # Envia o prompt para o modelo
@@ -141,3 +139,4 @@ if hoje_comidas.empty:
 else:
     for idx, row in hoje_comidas.iterrows():
         st.write(f"• **{row['Refeicao']}** — {row['Calorias']} kcal")
+                

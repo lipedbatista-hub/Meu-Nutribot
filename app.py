@@ -25,7 +25,7 @@ try:
     # Limpa espaços ou barras extras que possam vir do celular por acidente
     BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "")
     
-    # CORREÇÃO CRÍTICA: Garante a barra de separação exata entre o site e o ID da Bin
+    # URL de leitura e escrita com barramento correto
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
     
@@ -41,7 +41,7 @@ except Exception:
 def obter_data_hora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
-# --- FUNÇÕES DE SALVAMENTO COM TRATAMENTO EM NUVEM ---
+# --- FUNÇÕES DE SALVAMENTO ---
 def carregar_nuvem():
     try:
         url_dinamica = f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}"
@@ -127,9 +127,14 @@ else:
 
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
     novo_p = {
-        'data': obter_data_hora_brasil().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
-        'altura': int(altura), 'peso_atual': float(peso_atual), 'peso_meta': float(peso_meta), 
-        'atividade': activity = atividade, 'meta_calorica': int(round(meta_calorica))
+        'data': obter_data_hora_brasil().strftime('%Y-%m-%d %H:%M:%S'), 
+        'sexo': sexo, 
+        'idade': int(idade), 
+        'altura': int(altura), 
+        'peso_atual': float(peso_atual), 
+        'peso_meta': float(peso_meta), 
+        'atividade': atividade, 
+        'meta_calorica': int(round(meta_calorica))
     }
     st.session_state.banco_perfil.append(novo_p)
     if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):

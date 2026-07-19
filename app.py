@@ -15,7 +15,6 @@ st.markdown("Controle de peso, metas e inteligência artificial para calorias co
 # --- CONEXÃO SEGURA COM O GEMINI E STORAGE ---
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
-    # Criamos um ID único para o seu aplicativo salvar os dados na nuvem estável de forma invisível
     APP_ID = st.secrets.get("APP_ID", "nutribot_PROJETO_PADRAO_9988")
     URL_BANCO = f"https://vercel.app{APP_ID}"
 except Exception:
@@ -152,7 +151,7 @@ if st.button("Analisar e Gravar Alimento 🤖"):
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# Lista consumidos hoje com lixeira que funciona na nuvem
+# Lista consumidos hoje com lógica segura baseada na data/hora exata do item
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
@@ -165,9 +164,11 @@ else:
         with col_txt:
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
-            if st.button("🗑️", key=f"del_{idx}"):
-                # Remove o item da lista real e atualiza o servidor estável
-                banco_diario.pop(idx)
+            # Geramos uma chave única de botão usando o carimbo de data/hora
+            chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
+            if st.button("🗑️", key=chave_botao):
+                # Remove o item correto varrendo a lista original pela marcação temporal
+                banco_diario = [item for item in banco_diario if item.get('data') != row['data']]
                 salvar_nuvem(banco_perfil, banco_diario)
                 st.rerun()
 
@@ -194,4 +195,3 @@ else:
                 'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
             })
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
-    

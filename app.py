@@ -1,55 +1,71 @@
 import streamlit as st
 import pandas as pd
 import math
-import os
+import requests
 from datetime import datetime, date
 import google.generativeai as genai
 
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
 
-# Arquivos de banco de dados locais (salvos permanentemente no servidor do site)
-ARQUIVO_PERFIL = 'historico_perfil.csv'
-ARQUIVO_DIARIO = 'diario_alimentos.csv'
-
-# Inicializa os arquivos com as colunas corretas se eles não existirem
-if not os.path.exists(ARQUIVO_PERFIL):
-    pd.DataFrame(columns=['Data', 'Sexo', 'Idade', 'Altura', 'Peso_Atual', 'Peso_Meta', 'Atividade', 'Meta_Calorica']).to_csv(ARQUIVO_PERFIL, index=False)
-if not os.path.exists(ARQUIVO_DIARIO):
-    pd.DataFrame(columns=['Data', 'Refeicao', 'Calorias']).to_csv(ARQUIVO_DIARIO, index=False)
-
 # Título do Site
 st.title("🍏 Meu NutriBot Inteligente")
 st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
-# --- PAINEL LATERAL: CONFIGURAÇÕES E CHAVE API ---
-st.sidebar.header("🔑 Configurações do Sistema")
-chave_api = st.sidebar.text_input("Sua Chave Gemini (AI Studio)", type="password")
+# --- CONEXÃO INVISÍVEL E SEGURA (GOOGLE SHEETS E GEMINI) ---
+try:
+    ID_PLANILHA = st.secrets["ID_PLANILHA"]
+    CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
+    
+    # Links diretos para ler as abas da planilha como tabelas limpas (CSV)
+    URL_PERFIL = f"https://docs.google.com/spreadsheets/d/{ID_PLANILHA}/gviz/tq?tqx=out:csv&sheet=perfil"
+    URL_DIARIO = f"https://docs.google.com/spreadsheets/d/{ID_PLANILHA}/gviz/tq?tqx=out:csv&sheet=diario"
+except Exception as e:
+    st.error("Erro crítico de inicialização. Por favor, configure os Secrets no painel do Streamlit Cloud.")
+    st.stop()
 
-st.sidebar.subheader("⚖️ Seus Dados de Saúde")
-df_p = pd.read_csv(ARQUIVO_PERFIL)
+# --- FUNÇÕES DE BUSCA DE DADOS ---
+@st.cache_data(ttl=5) # Atualiza os dados a cada 5 segundos automaticamente
+def carregar_dados_perfil(url):
+    try:
+        return pd.read_csv(url)
+    except Exception:
+        return pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
 
-# Carrega os valores padrão do último registro salvo (se houver)
-p_peso = 70.0 if df_p.empty else float(df_p.iloc[-1]['Peso_Atual'])
-p_meta = 65.0 if df_p.empty else float(df_p.iloc[-1]['Peso_Meta'])
-p_idade = 25 if df_p.empty else int(df_p.iloc[-1]['Idade'])
-p_altura = 170 if df_p.empty else int(df_p.iloc[-1]['Altura'])
+@st.cache_data(ttl=5)
+def carregar_dados_diario(url):
+    try:
+        return pd.read_csv(url)
+    except Exception:
+        return pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
 
-# Campos visuais para o usuário preencher na barra lateral
-sexo = st.sidebar.selectbox("Sexo", ["Feminino", "Masculino"], index=0 if df_p.empty or df_p.iloc[-1]['Sexo'] == "Feminino" else 1)
+df_p = carregar_dados_perfil(URL_PERFIL)
+df_d = carregar_dados_diario(URL_DIARIO)
+
+# --- PAINEL LATERAL: DADOS DE SAÚDE ---
+st.sidebar.header("⚖️ Seus Dados de Saúde")
+
+p_peso = 70.0 if df_p.empty else float(df_p.iloc[-1]['peso_atual'])
+p_meta = 65.0 if df_p.empty else float(df_p.iloc[-1]['peso_meta'])
+p_idade = 25 if df_p.empty else int(df_p.iloc[-1]['idade'])
+p_altura = 170 if df_p.empty else int(df_p.iloc[-1]['altura'])
+
+sexo = st.sidebar.selectbox("Sexo", ["Feminino", "Masculino"], index=0 if df_p.empty or df_p.iloc[-1]['sexo'] == "Feminino" else 1)
 idade = st.sidebar.number_input("Idade (anos)", value=p_idade)
 altura = st.sidebar.number_input("Altura (cm)", value=p_altura)
 peso_atual = st.sidebar.number_input("Peso Atual (kg)", value=p_peso, step=0.1)
 peso_meta = st.sidebar.number_input("Sua Meta de Peso (kg)", value=p_meta, step=0.1)
-atividade = st.sidebar.selectbox("Nível de Atividade", ["Sedentário", "Leve", "Moderado", "Intenso"])
 
-# Fórmulas de Nutrição (Mifflin-St Jeor)
+lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
+index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
+atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
+
+# Fórmulas de Nutrição
 fatores = {"Sedentário": 1.2, "Leve": 1.375, "Moderado": 1.55, "Intenso": 1.725}
 fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
-# Cálculo da Estratégia de Calorias e do Tempo Restante
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
     meta_calorica = get - 500
@@ -61,12 +77,14 @@ else:
     meta_calorica = get
     dias_restantes = 0
 
-# Botão para salvar alterações de peso
+# Configuração de envio para o Google Sheets de forma mobile simples (Via Google Forms integrado se quiser automação total de escrita)
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    novo_p = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'Sexo': sexo, 'Idade': idade, 'Altura': altura, 'Peso_Atual': peso_atual, 'Peso_Meta': peso_meta, 'Atividade': atividade, 'Meta_Calorica': round(meta_calorica)}])
-    pd.concat([df_p, novo_p], ignore_index=True).to_csv(ARQUIVO_PERFIL, index=False)
-    st.sidebar.success("Dados de peso updated!")
-    st.rerun()
+    st.sidebar.warning("Para salvar dados diretamente na planilha do Google, use o aplicativo do Sheets ou integre um webhook.")
+    # Exibe os dados estruturados na tela para o usuário saber o que mudar na planilha se necessário
+    st.sidebar.write({
+        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': idade, 
+        'altura': altura, 'peso_atual': peso_atual, 'peso_meta': peso_meta, 'atividade': atividade, 'meta_calorica': round(meta_calorica)
+    })
 
 # --- CORPO PRINCIPAL DO SITE ---
 col1, col2, col3 = st.columns(3)
@@ -74,13 +92,13 @@ col1.metric("Peso Atual", f"{peso_atual} kg")
 col2.metric("Meta Final", f"{peso_meta} kg")
 col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 else "Na Meta! 🎉")
 
-# Processamento e exibição das calorias do dia atual
-df_d = pd.read_csv(ARQUIVO_DIARIO)
 hoje_str = datetime.now().strftime('%Y-%m-%d')
+comido_hoje = 0
 
-# Criação de coluna temporária para filtrar o dia de hoje
-df_d['Data_Curta'] = df_d['Data'].str.slice(0, 10)
-comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['Calorias'].sum()
+if not df_d.empty:
+    df_d['Data_Curta'] = pd.to_datetime(df_d['data']).dt.strftime('%Y-%m-%d')
+    comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].sum()
+
 restante = round(meta_calorica) - comido_hoje
 
 st.subheader("🔥 Contador de Calorias")
@@ -91,95 +109,61 @@ c_resta.markdown(f"### **Disponível:**  \n## {restante} kcal")
 
 st.markdown("---")
 
-# Caixa de texto para o usuário digitar a refeição de forma livre
 st.subheader("📝 Adicionar Alimento com IA")
-texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2 ovos e um copo de café com leite")
+texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2 ovos")
 
-if st.button("Analisar e Registrar comida 🤖"):
-    if not chave_api:
-        st.error("Por favor, insira sua chave da API do Gemini no menu lateral.")
-    elif not texto_comida:
+if st.button("Analisar Alimento 🤖"):
+    if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
         with st.spinner("A IA está calculando as calorias..."):
             try:
-                # --- CONFIGURAÇÃO E CHAMADA DA API DO GEMINI ---
-                genai.configure(api_key=chave_api)
-                
+                genai.configure(api_key=CHAVE_GEMINI)
                 instrucao_sistema = (
                     "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. "
-                    "Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, "
-                    "absolutamente nada mais. Se não for comida, responda 0."
+                    "Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição."
                 )
-                
-                model = genai.GenerativeModel(
-                    model_name="gemini-3.1-flash-lite",
-                    system_instruction=instrucao_sistema
-                )
-                
+                model = genai.GenerativeModel(model_name="gemini-3.1-flash-lite", system_instruction=instrucao_sistema)
                 response = model.generate_content(texto_comida)
-                texto_resposta = response.text.strip()
+                calorias = int(''.join(filter(str.isdigit, response.text.strip())) or 0)
                 
-                calorias = int(''.join(filter(str.isdigit, texto_resposta)) or 0)
-                
-                # Salva a refeição no histórico de forma definitiva (com data e hora exatas)
-                novo_alimento = pd.DataFrame([{'Data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'Refeicao': texto_comida, 'Calorias': calorias}])
-                df_atualizado = pd.concat([df_d, novo_alimento], ignore_index=True).drop(columns=['Data_Curta'], errors='ignore')
-                df_atualizado.to_csv(ARQUIVO_DIARIO, index=False)
-                
-                st.success(f"Registrado com sucesso! +{calorias} kcal adicionadas.")
-                st.rerun()
+                st.success(f"A IA calculou: **{calorias} kcal** para essa refeição!")
+                st.info("Abra o app do Google Planilhas no seu celular e adicione esta linha para registrar permanentemente.")
             except Exception as e:
-                st.error(f"Erro ao conectar com a IA: {e}")
+                st.error(f"Erro ao processar com a IA: {e}")
 
-# Lista na tela todos os alimentos consumidos no dia de hoje com opção de remoção
+# Lista consumidos hoje salvos no Sheets
 st.markdown("---")
-st.subheader("📋 Consumido Hoje")
-hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str]
+st.subheader("📋 Consumido Hoje (Lido do Google Sheets)")
+hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
 
 if hoje_comidas.empty:
-    st.info("Nenhum alimento registrado hoje.")
+    st.info("Nenhum alimento registrado hoje na sua planilha.")
 else:
     for idx, row in hoje_comidas.iterrows():
-        col_txt, col_btn = st.columns([0.85, 0.15])
-        with col_txt:
-            st.markdown(f"• **{row['Refeicao']}** — {row['Calorias']} kcal")
-        with col_btn:
-            if st.button("🗑️", key=f"del_{idx}"):
-                df_limpo = df_d.drop(idx).drop(columns=['Data_Curta'], errors='ignore')
-                df_limpo.to_csv(ARQUIVO_DIARIO, index=False)
-                st.rerun()
+        st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
 
-# --- NOVA SEÇÃO: HISTÓRICO PERMANENTE DE DATAS ---
+# --- HISTÓRICO COMPLETO ---
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
 if df_d.empty:
-    st.info("O banco de dados ainda está vazio.")
+    st.info("O banco de dados na planilha ainda está vazio.")
 else:
-    # Filtro interativo por calendário
-    st.markdown("Selecione um período para buscar seus registros antigos:")
     periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
-    
-    # Tratamento para garantir que o usuário selecionou início e fim no componente do Streamlit
-    if isinstance(periodo, list) and len(periodo) == 2:
+    if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
         data_inicio, data_fim = periodo
-        
-        # Converte a coluna 'Data' do arquivo para o tipo datetime do pandas para fazer a comparação correta
         df_historico = df_d.copy()
-        df_historico['Data_Objeto'] = pd.to_datetime(df_historico['Data']).dt.date
-        
-        # Filtra os dados com base no intervalo selecionado pelo usuário
+        df_historico['Data_Objeto'] = pd.to_datetime(df_historico['data']).dt.date
         df_filtrado = df_historico[(df_historico['Data_Objeto'] >= data_inicio) & (df_historico['Data_Objeto'] <= data_fim)]
         
         if df_filtrado.empty:
-            st.warning("Nenhum registro encontrado para o período selecionado.")
+            st.warning("Nenhum registro encontrado para este período.")
         else:
-            # Exibe métrica do total consumido no período filtrado
-            total_periodo = df_filtrado['Calorias'].sum()
-            st.metric(label="Total Consumido no Período", value=f"{total_periodo} kcal")
-            
-            # Formata a tabela final limpando colunas auxiliares antes de exibir para o usuário
-            tabela_exibicao = df_filtrado.drop(columns=['Data_Curta', 'Data_Objeto'], errors='ignore')
-            st.dataframe(tabela_exibicao, use_container_width=True, hide_index=True)
-        
+            total_periodo = df_filtrado['calorias'].sum()
+            st.markdown(f"**Total consumido no período selecionado:** {total_periodo} kcal")
+            df_exibicao = df_filtrado[['data', 'refeicao', 'calorias']].rename(columns={
+                'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
+            })
+            st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
+                    

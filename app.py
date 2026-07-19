@@ -19,24 +19,24 @@ st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="cente
 st.title("🍏 Meu NutriBot Inteligente")
 st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
-# --- CONEXÃO INVISÍVEL E SEGURA COM OS SECRETS ---
+# --- CONEXÃO INVISÍVEL, SEGURA E BLINDADA ---
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     
-    # Limpa rigorosamente o ID de qualquer caractere inválido ou espaço extra enviado pelo celular
-    BIN_ID_LIMPO = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "").replace("\n", "").replace("\r", "")
+    # CORREÇÃO DEFINITIVA: O seu ID real foi cravado diretamente aqui em texto puro
+    # Isso destrói qualquer erro de cache dos Secrets do Streamlit Cloud
+    BIN_ID_REAL = "6a5d0a74f5f4af5e29a48483"
     
-    # ENDEREÇOS FIXOS DO SERVIDOR JSONBIN TRAVADOS E SEPARADOS
-    URL_LEITURA = f"https://jsonbin.io{BIN_ID_LIMPO}/latest"
-    URL_ESCRITA = f"https://jsonbin.io{BIN_ID_LIMPO}"
+    URL_LEITURA = f"https://jsonbin.io{BIN_ID_REAL}/latest"
+    URL_ESCRITA = f"https://jsonbin.io{BIN_ID_REAL}"
     
     HEADERS_NATIVOS = {
         "X-Master-Key": JSONBIN_KEY, 
         "Content-Type": "application/json"
     }
 except Exception:
-    st.error("Erro crítico de chaves: Verifique se GEMINI_API_KEY, JSONBIN_KEY e BIN_ID estão salvos nos Secrets do Streamlit Cloud.")
+    st.error("Erro crítico de chaves: Verifique se GEMINI_API_KEY e JSONBIN_KEY estão salvos nos Secrets do Streamlit Cloud.")
     st.stop()
 
 # --- AJUSTE DE FUSO HORÁRIO SEGURO (SÃO PAULO) ---
@@ -231,4 +231,7 @@ else:
                 
                 if salvar_nuvem(st.session_state.banco_perfil, lista_diario_limpa):
                     st.session_state.banco_diario = lista_diario_limpa
-        
+                    st.rerun()
+
+# --- HISTÓRICO COMPLETO ---
+st.markdown("---")

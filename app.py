@@ -64,8 +64,13 @@ def salvar_nuvem(perfil, diario):
     try:
         payload = {"perfil": list(perfil), "diario": list(diario)}
         res = requests.put(URL_ESCRITA, headers=HEADERS, json=payload, timeout=7)
-        return res.status_code == 200
-    except Exception:
+        if res.status_code != 200:
+            # EXIBE O DIAGNÓSTICO DO ERRO NA TELA
+            st.error(f"⚠️ Resposta da Nuvem (Código {res.status_code}): {res.text}")
+            return False
+        return True
+    except Exception as e:
+        st.error(f"Falha física de rede: {e}")
         return False
 
 # --- CONTROLE SÍNCRONO DE INICIALIZAÇÃO ---
@@ -142,8 +147,6 @@ if st.sidebar.button("💾 Salvar/Atualizar Peso"):
         st.session_state.banco_perfil = lista_perfil_temp
         st.sidebar.success("Dados de peso fixados na nuvem!")
         st.rerun()
-    else:
-        st.sidebar.error("Falha ao salvar peso. Verifique a conexão com a nuvem.")
 
 # --- CORPO PRINCIPAL DO SITE ---
 col1, col2, col3 = st.columns(3)
@@ -200,8 +203,6 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                     st.session_state.banco_diario = lista_diario_temp
                     st.success(f"Registrado com sucesso! +{calorias} kcal.")
                     st.rerun()
-                else:
-                    st.error("Erro ao salvar alimento no servidor em nuvem. Tente novamente.")
             except Exception as e:
                 st.error(f"Erro ao processar com a IA: {e}")
 
@@ -237,4 +238,6 @@ else:
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
-# CORREÇÃO DA RENDERIZAÇÃO: Incluído o comando informativo identado corretamente na linha subsequente
+if len(st.session_state.banco_diario) == 0:
+    st.info("O banco de dados ainda está vazio.")
+    

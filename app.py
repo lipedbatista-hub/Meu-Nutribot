@@ -2,7 +2,9 @@ import streamlit as st
 import pandas as pd
 import math
 import requests
+import json
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 
 # Tenta importar o pacote google.generativeai de forma defensiva
 try:
@@ -23,7 +25,7 @@ try:
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "")
     
-    # URL de leitura e escrita com barramento correto
+    # Endpoints oficiais da API do JSONBin
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
     
@@ -35,9 +37,9 @@ except Exception:
     st.error("Erro crítico de chaves: Verifique se GEMINI_API_KEY, JSONBIN_KEY e BIN_ID estão salvos nos Secrets do Streamlit Cloud.")
     st.stop()
 
-# --- AJUSTE DE FUSO HORÁRIO (BRASÍLIA - UTC-3) ---
+# --- AJUSTE DE FUSO HORÁRIO SEGURO (SÃO PAULO) ---
 def obter_data_hora_brasil():
-    return datetime.utcnow() - timedelta(hours=3)
+    return datetime.now(ZoneInfo("America/Sao_Paulo"))
 
 # --- FUNÇÕES DE SALVAMENTO ---
 def carregar_nuvem():
@@ -49,27 +51,22 @@ def carregar_nuvem():
             record = conteudo.get("record", {})
             
             if isinstance(record, str):
-                import json
                 record = json.loads(record)
                 
             perfil = record.get("perfil", [])
             diario = record.get("diario", [])
-            return perfil, diario
+            return list(perfil), list(diario)
     except Exception:
         pass
     return [], []
 
 def salvar_nuvem(perfil, diario):
     try:
-        payload = {"perfil": perfil, "diario": diario}
+        payload = {"perfil": list(perfil), "diario": list(diario)}
         res = requests.put(URL_ESCRITA, headers=HEADERS, json=payload, timeout=7)
-        if res.status_code == 200:
-            return True
-        else:
-            st.error(f"Erro de comunicação com o servidor JSONBin: {res.status_code}")
-    except Exception as e:
-        st.error(f"Falha de rede ao salvar na nuvem: {e}")
-    return False
+        return res.status_code == 200
+    except Exception:
+        return False
 
 # --- CONTROLE SÍNCRONO DE INICIALIZAÇÃO ---
 if "dados_sincronizados" not in st.session_state:
@@ -79,31 +76,35 @@ if "dados_sincronizados" not in st.session_state:
         st.session_state.banco_diario = banco_diario
         st.session_state.dados_sincronizados = True
 
-# Cria os DataFrames estruturados a partir da memória estável sincronizada
-df_p = pd.DataFrame(st.session_state.banco_perfil)
-df_d = pd.DataFrame(st.session_state.banco_diario)
+# Cria os DataFrames estruturados garantindo a existência das colunas base desde o início
+df_p = pd.DataFrame(st.session_state.banco_perfil, columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
+df_d = pd.DataFrame(st.session_state.banco_diario, columns=['data', 'refeicao', 'calorias'])
 
-if df_p.empty:
-    df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
-if df_d.empty:
-    df_d = pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
+if not df_d.empty:
+    df_d['calorias'] = pd.to_numeric(df_d['calorias'], errors='coerce').fillna(0).astype(int)
 
 # --- PAINEL LATERAL: DADOS DE SAÚDE ---
 st.sidebar.header("⚖️ Seus Dados de Saúde")
 
-p_peso = 70.0 if df_p.empty else float(df_p.iloc[-1]['peso_atual'])
-p_meta = 65.0 if df_p.empty else float(df_p.iloc[-1]['peso_meta'])
-p_idade = 25 if df_p.empty else int(df_p.iloc[-1]['idade'])
-p_altura = 170 if df_p.empty else int(df_p.iloc[-1]['altura'])
+p_peso, p_meta, p_idade, p_altura, v_sexo, val_at = 70.0, 65.0, 25, 170, "Feminino", "Sedentário"
 
-sexo = st.sidebar.selectbox("Sexo", ["Feminino", "Masculino"], index=0 if df_p.empty or df_p.iloc[-1]['sexo'] == "Feminino" else 1)
+if len(st.session_state.banco_perfil) > 0:
+    ultimo_p = st.session_state.banco_perfil[-1]
+    p_peso = float(ultimo_p.get('peso_atual', 70.0))
+    p_meta = float(ultimo_p.get('peso_meta', 65.0))
+    p_idade = int(ultimo_p.get('idade', 25))
+    p_altura = int(ultimo_p.get('altura', 170))
+    v_sexo = str(ultimo_p.get('sexo', 'Feminino'))
+    val_at = str(ultimo_p.get('atividade', 'Sedentário'))
+
+sexo = st.sidebar.selectbox("Sexo", ["Feminino", "Masculino"], index=0 if v_sexo == "Feminino" else 1)
 idade = st.sidebar.number_input("Idade (anos)", value=p_idade)
 altura = st.sidebar.number_input("Altura (cm)", value=p_altura)
 peso_atual = st.sidebar.number_input("Peso Atual (kg)", value=p_peso, step=0.1)
 peso_meta = st.sidebar.number_input("Sua Meta de Peso (kg)", value=p_meta, step=0.1)
 
 lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
-index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
+index_atividade = lista_atividades.index(val_at) if val_at in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
 # Fórmulas de Nutrição
@@ -112,6 +113,7 @@ fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
+# Cálculo da Estratégia de Peso
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
     meta_calorica = get - 500
@@ -134,11 +136,14 @@ if st.sidebar.button("💾 Salvar/Atualizar Peso"):
         'atividade': atividade, 
         'meta_calorica': int(round(meta_calorica))
     }
-    st.session_state.banco_perfil.append(novo_p)
-    if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
-        df_p = pd.DataFrame(st.session_state.banco_perfil)  # Força a atualização local da tabela
+    
+    lista_perfil_temp = list(st.session_state.banco_perfil) + [novo_p]
+    if salvar_nuvem(lista_perfil_temp, st.session_state.banco_diario):
+        st.session_state.banco_perfil = lista_perfil_temp
         st.sidebar.success("Dados de peso fixados na nuvem!")
         st.rerun()
+    else:
+        st.sidebar.error("Falha ao salvar peso. Verifique a conexão com a nuvem.")
 
 # --- CORPO PRINCIPAL DO SITE ---
 col1, col2, col3 = st.columns(3)
@@ -149,9 +154,12 @@ col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 els
 hoje_str = obter_data_hora_brasil().strftime('%Y-%m-%d')
 comido_hoje = 0
 
-if not df_d.empty and 'data' in df_d.columns:
+# Processamento seguro da coluna de data curta contra tabelas vazias
+if len(st.session_state.banco_diario) > 0:
     df_d['Data_Curta'] = df_d['data'].astype(str).str.slice(0, 10)
-    comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].astype(int).sum()
+    comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].sum()
+else:
+    df_d['Data_Curta'] = pd.Series(dtype='str')
 
 restante = round(meta_calorica) - comido_hoje
 
@@ -187,51 +195,46 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                     'calorias': int(calorias)
                 }
                 
-                st.session_state.banco_diario.append(nova_comida)
-                if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
-                    df_d = pd.DataFrame(st.session_state.banco_diario)  # Força a atualização local antes do rerun
+                lista_diario_temp = list(st.session_state.banco_diario) + [nova_comida]
+                if salvar_nuvem(st.session_state.banco_perfil, lista_diario_temp):
+                    st.session_state.banco_diario = lista_diario_temp
                     st.success(f"Registrado com sucesso! +{calorias} kcal.")
                     st.rerun()
+                else:
+                    st.error("Erro ao salvar alimento no servidor em nuvem. Tente novamente.")
             except Exception as e:
-                st.error(f"Erro ao processar: {e}")
+                st.error(f"Erro ao processar com a IA: {e}")
 
 # --- EXIBIÇÃO EM TELA ---
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 
-if not df_d.empty and 'Data_Curta' in df_d.columns:
-    hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str]
-else:
-    hoje_comidas = pd.DataFrame()
+hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if 'Data_Curta' in df_d.columns else pd.DataFrame()
 
 if hoje_comidas.empty:
     st.info("Nenhum alimento registrado hoje.")
 else:
-    for idx, row in hoje_comidas.iterrows():
+    for i, (idx, row) in enumerate(hoje_comidas.iterrows()):
         col_txt, col_btn = st.columns([0.85, 0.15])
         with col_txt:
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
-            chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
+            chave_botao = f"btn_del_{i}_{idx}"
             if st.button("🗑️", key=chave_botao):
-                st.session_state.banco_diario = [item for item in st.session_state.banco_diario if item.get('data') != row['data']]
-                if salvar_nuvem(st.session_state.banco_perfil, st.session_state.banco_diario):
-                    df_d = pd.DataFrame(st.session_state.banco_diario)
+                string_alvo_data = str(row['data'])
+                string_alvo_ref = str(row['refeicao'])
+                
+                lista_diario_limpa = [
+                    item for item in st.session_state.banco_diario 
+                    if not (str(item.get('data')) == string_alvo_data and str(item.get('refeicao')) == string_alvo_ref)
+                ]
+                
+                if salvar_nuvem(st.session_state.banco_perfil, lista_diario_limpa):
+                    st.session_state.banco_diario = lista_diario_limpa
                     st.rerun()
 
 # --- HISTÓRICO COMPLETO ---
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
-if df_d.empty or df_d['data'].isna().all():
-    st.info("O banco de dados ainda está vazio.")
-else:
-    periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
-    if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
-        data_inicio, data_fim = periodo
-        df_historico = df_d.copy()
-        df_historico['Data_Objeto'] = pd.to_datetime(df_historico['data']).dt.date
-        df_filtrado = df_historico[(df_historico['Data_Objeto'] >= data_inicio) & (df_historico['Data_Objeto'] <= data_fim)]
-        
-        if df_filtrado.empty:
-                
+if len(st.session_state.banco_diario) == 0:

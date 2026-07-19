@@ -27,7 +27,7 @@ except Exception:
 # --- FUNÇÕES DE SALVAMENTO COM ATUALIZAÇÃO FORÇADA ---
 def carregar_nuvem():
     try:
-        # Adiciona carimbo de data/hora na URL para forçar o celular a ler o dado mais recente da nuvem
+        # Força o servidor a ignorar o cache usando o timestamp atual
         resposta = requests.get(f"{URL_LEITURA}?nocache={datetime.now().timestamp()}", headers=HEADERS, timeout=5)
         if resposta.status_code == 200:
             dados = resposta.json().get("record", {})
@@ -42,42 +42,37 @@ def salvar_nuvem(perfil, diario):
     except Exception as e:
         st.error(f"Erro ao salvar na nuvem: {e}")
 
-# Carrega os dados reais e estáveis da nuvem toda vez que o site atualiza
+# Carrega os dados estáveis direto do JSONBin
 banco_perfil, banco_diario = carregar_nuvem()
 
-df_p = pd.DataFrame(banco_perfil)
-df_d = pd.DataFrame(banco_diario)
-
-if df_p.empty:
-    df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
-if df_d.empty:
-    df_d = pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
+# Correção Crítica: Força a criação das colunas exatas do DataFrame para evitar conflito de leitura
+df_p = pd.DataFrame(banco_perfil, columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
+df_d = pd.DataFrame(banco_diario, columns=['data', 'refeicao', 'calorias'])
 
 # --- PAINEL LATERAL: DADOS DE SAÚDE ---
 st.sidebar.header("⚖️ Seus Dados de Saúde")
 
-p_peso = 70.0 if df_p.empty else float(df_p.iloc[-1]['peso_atual'])
-p_meta = 65.0 if df_p.empty else float(df_p.iloc[-1]['peso_meta'])
-p_idade = 25 if df_p.empty else int(df_p.iloc[-1]['idade'])
-p_altura = 170 if df_p.empty else int(df_p.iloc[-1]['altura'])
+p_peso = 70.0 if df_p.dropna(subset=['peso_atual']).empty else float(df_p.iloc[-1]['peso_atual'])
+p_meta = 65.0 if df_p.dropna(subset=['peso_meta']).empty else float(df_p.iloc[-1]['peso_meta'])
+p_idade = 25 if df_p.dropna(subset=['idade']).empty else int(df_p.iloc[-1]['idade'])
+p_altura = 170 if df_p.dropna(subset=['altura']).empty else int(df_p.iloc[-1]['altura'])
 
-sexo = st.sidebar.selectbox("Sexo", ["Feminino", "Masculino"], index=0 if df_p.empty or df_p.iloc[-1]['sexo'] == "Feminino" else 1)
+sexo = st.sidebar.selectbox("Sexo", ["Feminino", "Masculino"], index=0 if df_p.dropna(subset=['sexo']).empty or df_p.iloc[-1]['sexo'] == "Feminino" else 1)
 idade = st.sidebar.number_input("Idade (anos)", value=p_idade)
 altura = st.sidebar.number_input("Altura (cm)", value=p_altura)
 peso_atual = st.sidebar.number_input("Peso Atual (kg)", value=p_peso, step=0.1)
 peso_meta = st.sidebar.number_input("Sua Meta de Peso (kg)", value=p_meta, step=0.1)
 
 lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
-index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
+index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.dropna(subset=['atividade']).empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
-# Fórmulas de Nutrição (Mifflin-St Jeor)
+# Fórmulas de Nutrição
 fatores = {"Sedentário": 1.2, "Leve": 1.375, "Moderado": 1.55, "Intenso": 1.725}
 fator = fatores[atividade]
 tmb = (10 * peso_atual) + (6.25 * altura) - (5 * idade) + (5 if sexo == "Masculino" else -161)
 get = tmb * fator
 
-# Cálculo da Estratégia de Calorias e do Tempo Restante
 peso_a_mudar = peso_meta - peso_atual
 if peso_a_mudar < 0:
     meta_calorica = get - 500
@@ -89,7 +84,6 @@ else:
     meta_calorica = get
     dias_restantes = 0
 
-# SALVAR PESO NA NUVEM DE VERDADE
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
     novo_p = {
         'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
@@ -110,9 +104,10 @@ col3.metric("Tempo Restante", f"{dias_restantes} dias" if dias_restantes > 0 els
 hoje_str = datetime.now().strftime('%Y-%m-%d')
 comido_hoje = 0
 
-if not df_d.empty:
-    df_d['Data_Curta'] = pd.to_datetime(df_d['data']).dt.strftime('%Y-%m-%d')
-    comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].sum()
+if not df_d.dropna(subset=['data']).empty:
+    # Garante a formatação limpa de string para a comparação de datas funcionar no celular
+    df_d['Data_Curta'] = df_d['data'].astype(str).str.slice(0, 10)
+    comido_hoje = df_d[df_d['Data_Curta'] == hoje_str]['calorias'].astype(int).sum()
 
 restante = round(meta_calorica) - comido_hoje
 
@@ -144,21 +139,28 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                 
                 nova_comida = {
                     'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'refeicao': texto_comida,
-                    'calorias': calorias
+                    'refeicao': str(texto_comida),
+                    'calorias': int(calorias)
                 }
-                banco_diario.append(nova_comida)
-                salvar_nuvem(banco_perfil, banco_diario)
+                
+                # Recarrega a nuvem antes de adicionar para não perder históricos paralelos
+                p_atual, d_atual = carregar_nuvem()
+                d_atual.append(nova_comida)
+                salvar_nuvem(p_atual, d_atual)
                 
                 st.success(f"Registrado com sucesso! +{calorias} kcal.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# Lista consumidos hoje com lixeira sincronizada com a nuvem
+# Lista consumidos hoje calibrada
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
-hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
+
+if 'Data_Curta' in df_d.columns:
+    hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str]
+else:
+    hoje_comidas = pd.DataFrame()
 
 if hoje_comidas.empty:
     st.info("Nenhum alimento registrado hoje.")
@@ -168,19 +170,19 @@ else:
         with col_txt:
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
-            # Cria um identificador único para o botão usando o timestamp de salvamento
             chave_botao = f"del_{row['data']}_{idx}".replace(" ", "_").replace(":", "_")
             if st.button("🗑️", key=chave_botao):
-                # Filtra a lista original na nuvem removendo exatamente o registro clicado
-                banco_diario = [item for item in banco_diario if item.get('data') != row['data']]
-                salvar_nuvem(banco_perfil, banco_diario)
+                p_atual, d_atual = carregar_nuvem()
+                # Remove o item comparando a string de carimbo de data
+                d_limpo = [item for item in d_atual if item.get('data') != row['data']]
+                salvar_nuvem(p_atual, d_limpo)
                 st.rerun()
 
 # --- HISTÓRICO COMPLETO DE DATAS ---
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
-if df_d.empty:
+if df_d.dropna(subset=['data']).empty:
     st.info("O banco de dados ainda está vazio.")
 else:
     periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
@@ -193,7 +195,7 @@ else:
         if df_filtrado.empty:
             st.warning("Nenhum registro encontrado para este período.")
         else:
-            total_periodo = df_filtrado['calorias'].sum()
+            total_periodo = df_filtrado['calorias'].astype(int).sum()
             st.markdown(f"**Total consumido no período selecionado:** {total_periodo} kcal")
             df_exibicao = df_filtrado[['data', 'refeicao', 'calorias']].rename(columns={
                 'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'

@@ -23,9 +23,11 @@ st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
-    BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "")
     
-    # Endpoints oficiais da API do JSONBin
+    # Limpa rigorosamente o ID de espaços, barras ou quebras de linha vindas do celular
+    BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "").replace("\n", "").replace("\r", "")
+    
+    # ENDEREÇOS FIXOS DO SERVIDOR JSONBIN
     URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
     URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
     
@@ -65,12 +67,11 @@ def salvar_nuvem(perfil, diario):
         payload = {"perfil": list(perfil), "diario": list(diario)}
         res = requests.put(URL_ESCRITA, headers=HEADERS, json=payload, timeout=7)
         if res.status_code != 200:
-            # EXIBE O DIAGNÓSTICO DO ERRO NA TELA
             st.error(f"⚠️ Resposta da Nuvem (Código {res.status_code}): {res.text}")
             return False
         return True
     except Exception as e:
-        st.error(f"Falha física de rede: {e}")
+        st.error(f"Falha física de rede no envio: {e}")
         return False
 
 # --- CONTROLE SÍNCRONO DE INICIALIZAÇÃO ---
@@ -238,6 +239,3 @@ else:
 st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
-if len(st.session_state.banco_diario) == 0:
-    st.info("O banco de dados ainda está vazio.")
-    

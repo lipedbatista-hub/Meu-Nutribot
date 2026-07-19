@@ -108,9 +108,12 @@ if st.button("Analisar e Registrar comida 🤖"):
                 # Definição do comportamento (System Instruction) e escolha do modelo
                 instrucao_sistema = "Você é um nutricionista focado em contagem de calorias. O usuário vai dizer o que comeu. Estime o total de calorias. Responda APENAS com o número inteiro estimado de calorias da refeição, absolutamente nada mais. Se não for comida, responda 0."
                 
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash",
-                    system_instruction=instrucao_sistema
+                # Mude para esta linha:
+model = genai.GenerativeModel(
+    model_name="gemini-2.5-flash-001",  # Versão corrigida e disponível
+    system_instruction=instrucao_sistema
+)
+
                 )
                 
                 # Envia o prompt para o modelo

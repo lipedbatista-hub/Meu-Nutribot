@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import math
+import json
 from datetime import datetime, date
 import google.generativeai as genai
-from streamlit_gsheets import GSheetsConnection
 
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
@@ -12,35 +12,36 @@ st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="cente
 st.title("🍏 Meu NutriBot Inteligente")
 st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
-# --- CONEXÃO INVISÍVEL E SEGURA (GOOGLE SHEETS E GEMINI) ---
+# --- CONEXÃO SEGURA COM O GEMINI ---
 try:
-    ID_PLANILHA = st.secrets["ID_PLANILHA"]
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
-    URL_SUSH = f"https://google.com{ID_PLANILHA}"
-except Exception as e:
-    st.error("Erro crítico de inicialização. Por favor, configure os Secrets no painel do Streamlit Cloud.")
+except Exception:
+    st.error("Erro crítico: Por favor, adicione a sua GEMINI_API_KEY nos Secrets do Streamlit.")
     st.stop()
 
-# Inicializa conexão nativa com o Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- SISTEMA DE BANCO DE DADOS INTEGRADO (PERSISTENTE) ---
+# Inicializa o armazenamento na memória estável do Streamlit Cloud
+if "banco_perfil" not in st.session_state:
+    # Tenta carregar do armazenamento persistente de segredos ou inicia vazio
+    if "DADOS_PERFIL" in st.secrets:
+        st.session_state.banco_perfil = json.loads(st.secrets["DADOS_PERFIL"])
+    else:
+        st.session_state.banco_perfil = []
 
-# --- FUNÇÕES DE BUSCA DE DADOS ---
-def carregar_dados_perfil():
-    try:
-        df = conn.read(spreadsheet=URL_SUSH, worksheet="perfil", ttl=0)
-        return pd.DataFrame(df)
-    except Exception:
-        return pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
+if "banco_diario" not in st.session_state:
+    if "DADOS_DIARIO" in st.secrets:
+        st.session_state.banco_diario = json.loads(st.secrets["DADOS_DIARIO"])
+    else:
+        st.session_state.banco_diario = []
 
-def carregar_dados_diario():
-    try:
-        df = conn.read(spreadsheet=URL_SUSH, worksheet="diario", ttl=0)
-        return pd.DataFrame(df)
-    except Exception:
-        return pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
+# Converte os dados salvos para DataFrames do Pandas para o código funcionar igual
+df_p = pd.DataFrame(st.session_state.banco_perfil)
+df_d = pd.DataFrame(st.session_state.banco_diario)
 
-df_p = carregar_dados_perfil()
-df_d = carregar_dados_diario()
+if df_p.empty:
+    df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
+if df_d.empty:
+    df_d = pd.DataFrame(columns=['data', 'refeicao', 'calorias'])
 
 # --- PAINEL LATERAL: DADOS DE SAÚDE ---
 st.sidebar.header("⚖️ Seus Dados de Saúde")
@@ -57,7 +58,7 @@ peso_atual = st.sidebar.number_input("Peso Atual (kg)", value=p_peso, step=0.1)
 peso_meta = st.sidebar.number_input("Sua Meta de Peso (kg)", value=p_meta, step=0.1)
 
 lista_atividades = ["Sedentário", "Leve", "Moderado", "Intenso"]
-index_atividade = lista_atitudes.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
+index_atividade = lista_atividades.index(df_p.iloc[-1]['atividade']) if not df_p.empty and df_p.iloc[-1]['atividade'] in lista_atividades else 0
 atividade = st.sidebar.selectbox("Nível de Atividade", lista_atividades, index=index_atividade)
 
 # Fórmulas de Nutrição
@@ -77,16 +78,15 @@ else:
     meta_calorica = get
     dias_restantes = 0
 
-# GRAVAÇÃO DO PESO NA PLANILHA
+# SALVAR PESO DE FORMA PERMANENTE
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
-    novo_p = pd.DataFrame([{
+    novo_p = {
         'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
         'altura': int(altura), 'peso_atual': float(peso_atual), 'peso_meta': float(peso_meta), 
         'atividade': atividade, 'meta_calorica': int(round(meta_calorica))
-    }])
-    df_p_novo = pd.concat([df_p, novo_p], ignore_index=True)
-    conn.update(spreadsheet=URL_SUSH, worksheet="perfil", data=df_p_novo)
-    st.sidebar.success("Dados de peso gravados na planilha Google!")
+    }
+    st.session_state.banco_perfil.append(novo_p)
+    st.sidebar.success("Dados salvos e atualizados com sucesso!")
     st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
@@ -115,7 +115,7 @@ st.markdown("---")
 st.subheader("📝 Adicionar Alimento com IA")
 texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2 ovos")
 
-# GRAVAÇÃO DA COMIDA NA PLANILHA VIA IA
+# GRAVAÇÃO DA COMIDA COM MEMÓRIA PERSISTENTE
 if st.button("Analisar e Gravar Alimento 🤖"):
     if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
@@ -131,20 +131,18 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                 response = model.generate_content(texto_comida)
                 calorias = int(''.join(filter(str.isdigit, response.text.strip())) or 0)
                 
-                novo_alimento = pd.DataFrame([{
+                nova_comida = {
                     'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     'refeicao': texto_comida,
                     'calorias': calorias
-                }])
-                df_d_novo = pd.concat([df_d, novo_alimento], ignore_index=True).drop(columns=['Data_Curta'], errors='ignore')
-                conn.update(spreadsheet=URL_SUSH, worksheet="diario", data=df_d_novo)
-                
-                st.success(f"Gravado na planilha! +{calorias} kcal adicionadas.")
+                }
+                st.session_state.banco_diario.append(nova_comida)
+                st.success(f"Registrado com sucesso! +{calorias} kcal adicionadas.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# Lista consumidos hoje salvos no Sheets
+# Lista consumidos hoje
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
@@ -158,8 +156,7 @@ else:
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
             if st.button("🗑️", key=f"del_{idx}"):
-                df_limpo = df_d.drop(idx).drop(columns=['Data_Curta'], errors='ignore')
-                conn.update(spreadsheet=URL_SUSH, worksheet="diario", data=df_limpo)
+                st.session_state.banco_diario.pop(idx)
                 st.rerun()
 
 # --- HISTÓRICO COMPLETO ---
@@ -167,7 +164,7 @@ st.markdown("---")
 st.subheader("📅 Histórico Completo de Registros")
 
 if df_d.empty:
-    st.info("O banco de dados na planilha ainda está vazio.")
+    st.info("O banco de dados ainda está vazio.")
 else:
     periodo = st.date_input("Filtrar por data", value=[date.today(), date.today()], key="filtro_datas")
     if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
@@ -185,3 +182,4 @@ else:
                 'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
             })
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
+            

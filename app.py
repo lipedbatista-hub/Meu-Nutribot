@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import math
 import urllib.request
-import urllib.parse
 import json
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -25,14 +24,14 @@ try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     
-    # Limpa rigorosamente o ID de qualquer caractere inválido ou espaço extra enviado pelo celular
-    BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "").replace("\n", "").replace("\r", "")
+    # Limpa rigorosamente o ID de espaços, barras ou quebras de linha vindas do celular
+    BIN_ID_LIMPO = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "").replace("\n", "").replace("\r", "")
     
     # ENDEREÇOS FIXOS DO SERVIDOR JSONBIN TRAVADOS E SEPARADOS
-    URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
-    URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
+    URL_LEITURA = f"https://jsonbin.io{BIN_ID_LIMPO}/latest"
+    URL_ESCRITA = f"https://jsonbin.io{BIN_ID_LIMPO}"
     
-    HEADERS = {
+    HEADERS_NATIVOS = {
         "X-Master-Key": JSONBIN_KEY, 
         "Content-Type": "application/json"
     }
@@ -44,11 +43,11 @@ except Exception:
 def obter_data_hora_brasil():
     return datetime.now(ZoneInfo("America/Sao_Paulo"))
 
-# --- FUNÇÕES DE SALVAMENTO NATIVAS (SEM REQUEStS) ---
+# --- FUNÇÕES DE SALVAMENTO NATIVAS ---
 def carregar_nuvem():
     try:
         url_dinamica = f"{URL_LEITURA}?nocache={obter_data_hora_brasil().timestamp()}"
-        req = urllib.request.Request(url_dinamica, headers=HEADERS, method='GET')
+        req = urllib.request.Request(url_dinamica, headers=HEADERS_NATIVOS, method='GET')
         with urllib.request.urlopen(req, timeout=7) as resposta:
             conteudo = json.loads(resposta.read().decode('utf-8'))
             record = conteudo.get("record", {})
@@ -66,7 +65,8 @@ def carregar_nuvem():
 def salvar_nuvem(perfil, diario):
     try:
         payload = json.dumps({"perfil": list(perfil), "diario": list(diario)}).encode('utf-8')
-        req = urllib.request.Request(URL_ESCRITA, data=payload, headers=HEADERS, method='PUT')
+        # BLINDAGEM MÁXIMA: URL_ESCRITA garante a barra de separação física na internet
+        req = urllib.request.Request(URL_ESCRITA, data=payload, headers=HEADERS_NATIVOS, method='PUT')
         with urllib.request.urlopen(req, timeout=7) as resposta:
             return resposta.status == 200
     except Exception as e:
@@ -231,4 +231,4 @@ else:
                 ]
                 
                 if salvar_nuvem(st.session_state.banco_perfil, lista_diario_limpa):
-                    st.session_state.banco_diario = lista_diario_limpa
+        

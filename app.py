@@ -17,17 +17,18 @@ st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="cente
 st.title("🍏 Meu NutriBot Inteligente")
 st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
 
-# --- CONEXÃO INVISÍVEL E SEGURA COM JSONBIN ---
+# --- CONEXÃO INVISÍVEL E SEGURA ---
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
     JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
     
-    # Limpa espaços ou barras extras que possam vir do celular por acidente
-    BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "")
+    # Limpa o ID de qualquer caractere inválido ou espaço extra enviado pelo celular
+    BIN_ID = str(st.secrets["BIN_ID"]).strip().replace("/", "").replace(" ", "")
     
-    # URL de leitura e escrita com barramento correto
-    URL_LEITURA = f"https://jsonbin.io{BIN_ID}/latest"
-    URL_ESCRITA = f"https://jsonbin.io{BIN_ID}"
+    # ENDEREÇO BLINDADO: A barra '/' foi forçada entre a API fixa e o código da sua Bin
+    URL_API_FIXA = "https://jsonbin.io"
+    URL_LEITURA = f"{URL_API_FIXA}/{BIN_ID}/latest"
+    URL_ESCRITA = f"{URL_API_FIXA}/{BIN_ID}"
     
     HEADERS = {
         "X-Master-Key": JSONBIN_KEY, 
@@ -236,4 +237,3 @@ else:
             st.warning("Nenhum registro encontrado para este período.")
         else:
             total_periodo = df_filtrado['calorias'].astype(int).sum()
-            st.markdown(f"**Total consumido no período selecionado:** {total_periodo} kcal")

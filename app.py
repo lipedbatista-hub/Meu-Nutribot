@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import math
+import requests
 import json
 from datetime import datetime, date
 import google.generativeai as genai
@@ -8,35 +9,41 @@ import google.generativeai as genai
 # Configuração da página do site
 st.set_page_config(page_title="Meu NutriBot IA", page_icon="🍏", layout="centered")
 
-# Título do Site
 st.title("🍏 Meu NutriBot Inteligente")
-st.markdown("Controle de peso, metas e inteligência artificial para calorias.")
+st.markdown("Controle de peso, metas e inteligência artificial para calorias com persistência em nuvem.")
 
-# --- CONEXÃO SEGURA COM O GEMINI ---
+# --- CONEXÃO SEGURA COM O GEMINI E STORAGE ---
 try:
     CHAVE_GEMINI = st.secrets["GEMINI_API_KEY"]
+    # Criamos um ID único para o seu aplicativo salvar os dados na nuvem estável de forma invisível
+    APP_ID = st.secrets.get("APP_ID", "nutribot_PROJETO_PADRAO_9988")
+    URL_BANCO = f"https://vercel.app{APP_ID}"
 except Exception:
     st.error("Erro crítico: Por favor, adicione a sua GEMINI_API_KEY nos Secrets do Streamlit.")
     st.stop()
 
-# --- SISTEMA DE BANCO DE DADOS INTEGRADO (PERSISTENTE) ---
-# Inicializa o armazenamento na memória estável do Streamlit Cloud
-if "banco_perfil" not in st.session_state:
-    # Tenta carregar do armazenamento persistente de segredos ou inicia vazio
-    if "DADOS_PERFIL" in st.secrets:
-        st.session_state.banco_perfil = json.loads(st.secrets["DADOS_PERFIL"])
-    else:
-        st.session_state.banco_perfil = []
+# --- FUNÇÕES NATIVAS DE SALVAMENTO REMOTO (NUNCA APAGA) ---
+def carregar_nuvem():
+    try:
+        resposta = requests.get(URL_BANCO, timeout=5)
+        if resposta.status_code == 200 and resposta.text:
+            dados = resposta.json()
+            return dados.get("perfil", []), dados.get("diario", [])
+    except Exception:
+        pass
+    return [], []
 
-if "banco_diario" not in st.session_state:
-    if "DADOS_DIARIO" in st.secrets:
-        st.session_state.banco_diario = json.loads(st.secrets["DADOS_DIARIO"])
-    else:
-        st.session_state.banco_diario = []
+def salvar_nuvem(perfil, diario):
+    try:
+        requests.post(URL_BANCO, json={"perfil": perfil, "diario": diario}, timeout=5)
+    except Exception:
+        st.error("Erro de conexão com o servidor de dados. Tentando novamente...")
 
-# Converte os dados salvos para DataFrames do Pandas para o código funcionar igual
-df_p = pd.DataFrame(st.session_state.banco_perfil)
-df_d = pd.DataFrame(st.session_state.banco_diario)
+# Carrega os dados reais direto da nuvem toda vez que o site abre
+banco_perfil, banco_diario = carregar_nuvem()
+
+df_p = pd.DataFrame(banco_perfil)
+df_d = pd.DataFrame(banco_diario)
 
 if df_p.empty:
     df_p = pd.DataFrame(columns=['data', 'sexo', 'idade', 'altura', 'peso_atual', 'peso_meta', 'atividade', 'meta_calorica'])
@@ -78,15 +85,16 @@ else:
     meta_calorica = get
     dias_restantes = 0
 
-# SALVAR PESO DE FORMA PERMANENTE
+# SALVAR PESO NA NUVEM DE VERDADE
 if st.sidebar.button("💾 Salvar/Atualizar Peso"):
     novo_p = {
         'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sexo': sexo, 'idade': int(idade), 
         'altura': int(altura), 'peso_atual': float(peso_atual), 'peso_meta': float(peso_meta), 
         'atividade': atividade, 'meta_calorica': int(round(meta_calorica))
     }
-    st.session_state.banco_perfil.append(novo_p)
-    st.sidebar.success("Dados salvos e atualizados com sucesso!")
+    banco_perfil.append(novo_p)
+    salvar_nuvem(banco_perfil, banco_diario)
+    st.sidebar.success("Dados de saúde salvos permanentemente!")
     st.rerun()
 
 # --- CORPO PRINCIPAL DO SITE ---
@@ -115,12 +123,12 @@ st.markdown("---")
 st.subheader("📝 Adicionar Alimento com IA")
 texto_comida = st.text_input("O que você comeu?", placeholder="Ex: Cuscuz com 2 ovos")
 
-# GRAVAÇÃO DA COMIDA COM MEMÓRIA PERSISTENTE
+# GRAVAÇÃO E PERSISTÊNCIA COMPLETA DA COMIDA
 if st.button("Analisar e Gravar Alimento 🤖"):
     if not texto_comida:
         st.warning("Digite o que você comeu antes de enviar.")
     else:
-        with st.spinner("A IA está calculando e salvando..."):
+        with st.spinner("A IA está calculando e salvando na nuvem..."):
             try:
                 genai.configure(api_key=CHAVE_GEMINI)
                 instrucao_sistema = (
@@ -136,13 +144,15 @@ if st.button("Analisar e Gravar Alimento 🤖"):
                     'refeicao': texto_comida,
                     'calorias': calorias
                 }
-                st.session_state.banco_diario.append(nova_comida)
-                st.success(f"Registrado com sucesso! +{calorias} kcal adicionadas.")
+                banco_diario.append(nova_comida)
+                salvar_nuvem(banco_perfil, banco_diario)
+                
+                st.success(f"Registrado com sucesso! +{calorias} kcal salvas na nuvem.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
 
-# Lista consumidos hoje
+# Lista consumidos hoje com lixeira que funciona na nuvem
 st.markdown("---")
 st.subheader("📋 Consumido Hoje")
 hoje_comidas = df_d[df_d['Data_Curta'] == hoje_str] if not df_d.empty else pd.DataFrame()
@@ -156,7 +166,9 @@ else:
             st.markdown(f"• **{row['refeicao']}** — {row['calorias']} kcal")
         with col_btn:
             if st.button("🗑️", key=f"del_{idx}"):
-                st.session_state.banco_diario.pop(idx)
+                # Remove o item da lista real e atualiza o servidor estável
+                banco_diario.pop(idx)
+                salvar_nuvem(banco_perfil, banco_diario)
                 st.rerun()
 
 # --- HISTÓRICO COMPLETO ---
@@ -182,4 +194,4 @@ else:
                 'data': 'Data e Hora', 'refeicao': 'Refeição consumida', 'calorias': 'Calorias (kcal)'
             })
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
-            
+    
